@@ -123,8 +123,8 @@ CLI-провайдер без стану: системний промпт дод
 ## Перевірка
 
 ```bash
-tr-pipeline test --provider gemini
-tr-pipeline stats
+gameloc test --provider gemini
+gameloc stats
 ```
 
 ## Власний провайдер

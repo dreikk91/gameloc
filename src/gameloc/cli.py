@@ -1,4 +1,4 @@
-"""Command line interface: ``tr-pipeline --help``."""
+"""Command line interface: ``gameloc --help``."""
 
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ from .text import TagMasker, Validator
 from .translate import Translator
 from .util import read_json, read_text, write_json, write_text_atomic
 
-log = logging.getLogger("tr_pipeline")
+log = logging.getLogger("gameloc")
 
-TEMPLATE = '''# tr-pipeline project file. Paths are relative to this file.
+TEMPLATE = '''# gameloc project file. Paths are relative to this file.
 game = "My Game"
 target_lang = "uk"
-workdir = "tr_work"            # checkpoints, logs, proofreading runs, output
+workdir = "gameloc_work"            # checkpoints, logs, proofreading runs, output
 provider = "openai"            # a [providers.NAME] profile below or a bare type
 
 [source]
@@ -187,9 +187,10 @@ def _print(value: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="tr-pipeline", description="AI translation and proofreading of game text.")
-    parser.add_argument("-c", "--config", type=Path, default=Path("tr_pipeline.toml"),
-                        help="project file (default: tr_pipeline.toml)")
+    parser = argparse.ArgumentParser(
+        prog="gameloc", description="gameloc: AI translation and three-pass proofreading of game text.")
+    parser.add_argument("-c", "--config", type=Path, default=Path("gameloc.toml"),
+                        help="project file (default: gameloc.toml)")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)

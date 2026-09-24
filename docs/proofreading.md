@@ -13,14 +13,14 @@
 ## Швидкий шлях
 
 ```bash
-tr-pipeline proofread prepare               # snapshot усіх перекладених рядків
-tr-pipeline proofread run                   # meaning → edit → verify, стадії просуваються автоматично
-tr-pipeline proofread export                # accepted → чекпоінт зі статусом proofread
-tr-pipeline export                          # у файли гри
+gameloc proofread prepare               # snapshot усіх перекладених рядків
+gameloc proofread run                   # meaning → edit → verify, стадії просуваються автоматично
+gameloc proofread export                # accepted → чекпоінт зі статусом proofread
+gameloc export                          # у файли гри
 ```
 
 `prepare` приймає `--scene` (вичитка по главах) і `--include-proofread` (повторно вичитати вже вичитане).
-Без явного шляху створюється `tr_work/proofread/<дата-час>`, інші команди беруть останній запуск.
+Без явного шляху створюється `gameloc_work/proofread/<дата-час>`, інші команди беруть останній запуск.
 
 Для редактури можна взяти сильнішу модель, ніж для перекладу:
 
@@ -34,7 +34,7 @@ workers = 4
 ## Як це влаштовано
 
 ```
-tr_work/proofread/20260924-101500/
+gameloc_work/proofread/20260924-101500/
   snapshot.json               незмінний знімок: тексти, чернетки, промпти стадій
   meaning/packets.jsonl       пакети (batch_id = хеш вмісту)
   meaning/responses/<id>.json перевірені відповіді (з хешем промпту)
@@ -55,11 +55,11 @@ tr_work/proofread/20260924-101500/
 Коли API недоступний або хочеться вичитати критичну сцену самому чи в веб-чаті:
 
 ```bash
-tr-pipeline proofread next meaning            # пише next-<batch>.txt з повним промптом
+gameloc proofread next meaning            # пише next-<batch>.txt з повним промптом
 # вставте текст у чат, збережіть відповідь у answer.json
-tr-pipeline proofread submit meaning <batch> answer.json --reviewer "Олена"
-tr-pipeline proofread advance edit            # коли meaning завершено
-tr-pipeline proofread status
+gameloc proofread submit meaning <batch> answer.json --reviewer "Олена"
+gameloc proofread advance edit            # коли meaning завершено
+gameloc proofread status
 ```
 
 Ручні та автоматичні відповіді можна змішувати в одному запуску.
@@ -70,10 +70,10 @@ tr-pipeline proofread status
 Зручний цикл для людини:
 
 ```bash
-tr-pipeline sheet-export review.csv --scene chapter1
+gameloc sheet-export review.csv --scene chapter1
 # перекладач правит колонку translation
-tr-pipeline sheet-import review.csv           # валідація + статус manual
+gameloc sheet-import review.csv           # валідація + статус manual
 ```
 
-`tr-pipeline audit` перевіряє весь чекпоінт (теги, скрипти, латиниця, довжина, заборонені варіанти з глосарію),
+`gameloc audit` перевіряє весь чекпоінт (теги, скрипти, латиниця, довжина, заборонені варіанти з глосарію),
 `audit --requeue` відправляє проблемні рядки на повторний переклад.

@@ -4,9 +4,9 @@
 
 ```python
 from pathlib import Path
-from tr_pipeline import Project, Proofreader, Store, Translator, load_config
+from gameloc import Project, Proofreader, Store, Translator, load_config
 
-cfg = load_config("tr_pipeline.toml")
+cfg = load_config("gameloc.toml")
 cfg.translate.workers = 4                      # будь-яку опцію можна змінити в коді
 
 report = Translator(cfg, provider="gemini").run(scenes=["chapter1"], limit=500)
@@ -42,8 +42,8 @@ Project(cfg).export(Store(cfg.work_dir))       # у файли гри
 Кидайте типізовані помилки, щоб спрацювала правильна політика.
 
 ```python
-from tr_pipeline import Completion, Provider
-from tr_pipeline.providers.base import AuthError, RateLimited, TransientError, post_json
+from gameloc import Completion, Provider
+from gameloc.providers.base import AuthError, RateLimited, TransientError, post_json
 
 class MyProvider(Provider):
     type = "my"
@@ -66,7 +66,7 @@ type = "my_package.providers:MyProvider"
 або через entry point у `pyproject.toml` вашого пакета — тоді працює `type = "my"`:
 
 ```toml
-[project.entry-points."tr_pipeline.providers"]
+[project.entry-points."gameloc.providers"]
 my = "my_package.providers:MyProvider"
 ```
 
@@ -119,7 +119,7 @@ en = "text"
 `Validator.problems(record, text) -> list[str]` можна розширити наслідуванням і передати свій екземпляр:
 
 ```python
-from tr_pipeline import Translator, Validator
+from gameloc import Translator, Validator
 
 class MyValidator(Validator):
     def problems(self, record, text):
@@ -135,10 +135,10 @@ translator.validator = MyValidator(cfg, translator.masker)
 ## Публікація на PyPI
 
 ```bash
-uv build                         # dist/tr_pipeline-0.1.0.tar.gz + .whl
+uv build                         # dist/gameloc-0.1.0.tar.gz + .whl
 uv publish --token pypi-...      # або налаштуйте trusted publishing у GitHub Actions
 ```
 
-Перед першою публікацією перевірте, що імʼя `tr-pipeline` вільне на pypi.org (інакше змініть `name` у `pyproject.toml`),
-оновіть `authors`, `project.urls` і версію. Спершу можна спробувати TestPyPI:
-`uv publish --publish-url https://test.pypi.org/legacy/`.
+Імʼя `gameloc` на момент створення було вільне на pypi.org, але PyPI може відхилити надто схожі назви,
+тож спершу спробуйте TestPyPI: `uv publish --publish-url https://test.pypi.org/legacy/`.
+Перед публікацією оновіть `authors`, `project.urls` і версію.

@@ -1,10 +1,11 @@
-# tr-pipeline
+# gameloc
 
-Рушійно-незалежна бібліотека та CLI для AI-перекладу й трирівневої редактури ігрового тексту.
+**gameloc** (game localization) — рушійно-незалежна бібліотека та CLI для AI-перекладу й трирівневої редактури ігрового тексту.
 Один TOML-файл описує гру: де лежать рядки, якими мовами, які теги в тексті та через який API
 перекладати. Далі конвеєр однаковий для Unity, Unreal Engine 5 і власних рушіїв.
 
-*Engine-agnostic AI translation and three-pass proofreading for video game text.*
+*gameloc — engine-agnostic AI translation and three-pass proofreading for video game text
+(Unity, Unreal Engine, custom engines).*
 
 ## Можливості
 
@@ -27,24 +28,24 @@
 ## Встановлення
 
 ```bash
-uv tool install tr-pipeline        # як CLI
-uv add tr-pipeline                 # як бібліотека в проєкт
-pip install tr-pipeline            # або так
+uv tool install gameloc        # як CLI
+uv add gameloc                 # як бібліотека в проєкт
+pip install gameloc            # або так
 ```
 
 ## Швидкий старт
 
 ```bash
-tr-pipeline init                   # створює закоментований tr_pipeline.toml
+gameloc init                   # створює закоментований gameloc.toml
 # відредагуйте [source] під свої файли, оберіть провайдера
 export OPENAI_API_KEY=...          # або GEMINI_API_KEY / ANTHROPIC_API_KEY ...
-tr-pipeline status                 # скільки рядків знайдено й перекладено
-tr-pipeline translate --dry-run    # показати перший промпт, нічого не надсилати
-tr-pipeline translate              # перекласти все (Ctrl+C безпечний)
-tr-pipeline proofread prepare      # трирівнева редактура
-tr-pipeline proofread run
-tr-pipeline proofread export
-tr-pipeline export                 # записати переклад у копії файлів гри
+gameloc status                 # скільки рядків знайдено й перекладено
+gameloc translate --dry-run    # показати перший промпт, нічого не надсилати
+gameloc translate              # перекласти все (Ctrl+C безпечний)
+gameloc proofread prepare      # трирівнева редактура
+gameloc proofread run
+gameloc proofread export
+gameloc export                 # записати переклад у копії файлів гри
 ```
 
 Мінімальний конфіг для Unity-JSON:
@@ -71,7 +72,7 @@ rpm = 10
 
 | Команда | Що робить |
 |---|---|
-| `init` | шаблон `tr_pipeline.toml` |
+| `init` | шаблон `gameloc.toml` |
 | `status` | прогрес: перекладено / в черзі / застаріло, топ сцен у черзі |
 | `translate [--scene S] [--ids ...] [--limit N] [--provider P] [--model M] [--workers N] [--retranslate] [--dry-run]` | переклад |
 | `test [--provider P]` | тестовий запит до провайдера |
@@ -85,7 +86,7 @@ rpm = 10
 
 ## Документація
 
-- [Конфігурація](docs/configuration.md) — повний довідник `tr_pipeline.toml`
+- [Конфігурація](docs/configuration.md) — повний довідник `gameloc.toml`
 - [Рушії та формати](docs/engines.md) — готові рецепти для Unity, UE5, власних рушіїв
 - [Провайдери](docs/providers.md) — API, CLI-утиліти, ліміти, резервні моделі
 - [Редактура](docs/proofreading.md) — трирівнева вичитка, ручний режим

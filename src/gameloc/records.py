@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from .config import Config, LangSource
     from .store import Store
 
-log = logging.getLogger("tr_pipeline")
+log = logging.getLogger("gameloc")
 
 
 @dataclass

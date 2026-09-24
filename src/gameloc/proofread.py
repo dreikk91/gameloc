@@ -26,7 +26,7 @@ from .store import Store
 from .text import TagMasker, Validator
 from .util import dumps, extract_json, iter_jsonl, read_json, sha256, write_json, write_text_atomic
 
-log = logging.getLogger("tr_pipeline")
+log = logging.getLogger("gameloc")
 
 STAGES = ("meaning", "edit", "verify")
 DECISIONS = {

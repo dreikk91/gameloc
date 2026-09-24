@@ -15,7 +15,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-log = logging.getLogger("tr_pipeline")
+log = logging.getLogger("gameloc")
 
 
 class ProviderError(RuntimeError):

@@ -151,7 +151,7 @@ class Config:
     source: SourceConfig
     game: str = ""
     target_lang: str = "uk"
-    workdir: str = "tr_work"
+    workdir: str = "gameloc_work"
     provider: str = "openai"
     providers: dict[str, dict[str, Any]] = field(default_factory=dict)
     output: OutputConfig = field(default_factory=OutputConfig)

@@ -19,7 +19,7 @@ from .store import Store
 from .text import TagMasker, Validator
 from .util import dumps, extract_json
 
-log = logging.getLogger("tr_pipeline")
+log = logging.getLogger("gameloc")
 
 _HEADER_RESERVE = 2000  # characters kept free for the scene, character and glossary header
 

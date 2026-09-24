@@ -1,6 +1,6 @@
 """Model providers. ``create_provider`` builds one from a ``[providers.NAME]`` table.
 
-Third-party providers register under the ``tr_pipeline.providers`` entry-point group
+Third-party providers register under the ``gameloc.providers`` entry-point group
 or are referenced directly as ``type = "package.module:Class"``.
 """
 
@@ -23,9 +23,9 @@ from .base import (
 from .openai import PRESETS
 
 BUILTIN = {
-    "openai": "tr_pipeline.providers.openai:OpenAIProvider",
-    "gemini": "tr_pipeline.providers.gemini:GeminiProvider",
-    "cli": "tr_pipeline.providers.cli:CLIProvider",
+    "openai": "gameloc.providers.openai:OpenAIProvider",
+    "gemini": "gameloc.providers.gemini:GeminiProvider",
+    "cli": "gameloc.providers.cli:CLIProvider",
 }
 
 __all__ = ["AuthError", "BUILTIN", "Completion", "ContextOverflow", "PRESETS", "Provider", "ProviderError",
@@ -53,7 +53,7 @@ def create_provider(options: dict[str, Any]) -> Provider:
     elif ":" in kind:
         cls = _load(kind)
     else:
-        found = [ep for ep in entry_points(group="tr_pipeline.providers") if ep.name == kind]
+        found = [ep for ep in entry_points(group="gameloc.providers") if ep.name == kind]
         if not found:
             known = ", ".join(sorted({*BUILTIN, *PRESETS}))
             raise ValueError(f"unknown provider type {kind!r}; known: {known}")

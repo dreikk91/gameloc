@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tr_pipeline import (
+from gameloc import (
     Completion,
     Proofreader,
     Provider,
@@ -15,9 +15,9 @@ from tr_pipeline import (
     Translator,
     config_from_dict,
 )
-from tr_pipeline.formats import load_table
-from tr_pipeline.records import Project
-from tr_pipeline.util import extract_json
+from gameloc.formats import load_table
+from gameloc.records import Project
+from gameloc.util import extract_json
 
 
 class FakeProvider(Provider):
@@ -112,7 +112,7 @@ def test_translate_resume_export(tmp_path: Path) -> None:
     assert again.selected == 0 and provider.calls == 2  # resumed from the checkpoint
 
     Project(cfg).export(Store(cfg.work_dir))
-    out = json.loads((tmp_path / "tr_work/output/strings.json").read_text(encoding="utf-8"))["strings"]
+    out = json.loads((tmp_path / "gameloc_work/output/strings.json").read_text(encoding="utf-8"))["strings"]
     assert [row.get("uk") for row in out] == ["Привіт<b></b>", "Привіт<b></b>", "Привіт{name}", None]
 
 
