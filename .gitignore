@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+dist/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+tr_work/
