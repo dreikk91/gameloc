@@ -1,11 +1,10 @@
 # gameloc
 
+[English](README.md) | **Українська**
+
 **gameloc** (game localization) — рушійно-незалежна бібліотека та CLI для AI-перекладу й трирівневої редактури ігрового тексту.
 Один TOML-файл описує гру: де лежать рядки, якими мовами, які теги в тексті та через який API
 перекладати. Далі конвеєр однаковий для Unity, Unreal Engine 5 і власних рушіїв.
-
-*gameloc — engine-agnostic AI translation and three-pass proofreading for video game text
-(Unity, Unreal Engine, custom engines).*
 
 ## Можливості
 
@@ -38,7 +37,7 @@ pip install gameloc            # або так
 ```bash
 gameloc init                   # створює закоментований gameloc.toml
 # відредагуйте [source] під свої файли, оберіть провайдера
-export OPENAI_API_KEY=...          # або GEMINI_API_KEY / ANTHROPIC_API_KEY ...
+export OPENAI_API_KEY=...      # або GEMINI_API_KEY / ANTHROPIC_API_KEY ...
 gameloc status                 # скільки рядків знайдено й перекладено
 gameloc translate --dry-run    # показати перший промпт, нічого не надсилати
 gameloc translate              # перекласти все (Ctrl+C безпечний)
@@ -86,11 +85,11 @@ rpm = 10
 
 ## Документація
 
-- [Конфігурація](docs/configuration.md) — повний довідник `gameloc.toml`
-- [Рушії та формати](docs/engines.md) — готові рецепти для Unity, UE5, власних рушіїв
-- [Провайдери](docs/providers.md) — API, CLI-утиліти, ліміти, резервні моделі
-- [Редактура](docs/proofreading.md) — трирівнева вичитка, ручний режим
-- [Розширення та бібліотека](docs/extending.md) — Python API, власні формати й провайдери, публікація на PyPI
+- [Конфігурація](docs/uk/configuration.md) — повний довідник `gameloc.toml`
+- [Рушії та формати](docs/uk/engines.md) — готові рецепти для Unity, UE5, власних рушіїв
+- [Провайдери](docs/uk/providers.md) — API, CLI-утиліти, ліміти, резервні моделі
+- [Редактура](docs/uk/proofreading.md) — трирівнева вичитка, ручний режим
+- [Розширення та бібліотека](docs/uk/extending.md) — Python API, власні формати й провайдери, публікація на PyPI
 
 ## Розробка
 

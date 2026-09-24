@@ -1,5 +1,7 @@
 # Розширення та використання як бібліотеки
 
+[English](../en/extending.md) | **Українська**
+
 ## Python API
 
 ```python

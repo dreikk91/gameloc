@@ -1,5 +1,7 @@
 # Провайдери
 
+[English](../en/providers.md) | **Українська**
+
 Провайдер — це профіль у `[providers.NAME]`. Активний обирається `provider = "NAME"`, окремо для перекладу
 (`[translate] provider`) та редактури (`[proofread] provider`) або ключем `--provider NAME`.
 Модель можна підмінити `--model`.
