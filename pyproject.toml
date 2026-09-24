@@ -28,7 +28,9 @@ classifiers = [
 gameloc = "gameloc.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/apidlypnyi/gameloc/tree/main/docs"
+Homepage = "https://github.com/dreikk91/gameloc"
+Documentation = "https://github.com/dreikk91/gameloc/tree/master/docs"
+Issues = "https://github.com/dreikk91/gameloc/issues"
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]
