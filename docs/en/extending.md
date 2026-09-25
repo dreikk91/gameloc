@@ -139,11 +139,14 @@ translator.validator = MyValidator(cfg, translator.masker)
 
 ## Publishing to PyPI
 
-```bash
-uv build                         # dist/gameloc-0.1.0.tar.gz + .whl
-uv publish --token pypi-...      # or set up trusted publishing in GitHub Actions
-```
+Releases are published by GitHub Actions ([`.github/workflows/workflow.yml`](../../.github/workflows/workflow.yml))
+through PyPI trusted publishing — no API token is stored anywhere.
 
-The name `gameloc` was free on pypi.org when the project was created, but PyPI may reject names that are too
-similar to existing ones, so try TestPyPI first: `uv publish --publish-url https://test.pypi.org/legacy/`.
-Update `authors`, `project.urls` and the version before publishing.
+1. Bump `version` in `pyproject.toml` (`uv version --bump patch|minor|major`) and push.
+2. Create a GitHub release with the tag `v<version>` (e.g. `v0.1.0`).
+3. The workflow runs ruff, mypy and the tests, checks that the tag matches the version, builds and uploads.
+
+One-time setup: on PyPI add a trusted publisher (owner `dreikk91`, repository `gameloc`, workflow `workflow.yml`,
+environment `pypi`) and create the `pypi` environment in the repository settings.
+
+Manual alternative: `uv build && uv publish --token pypi-...`.
