@@ -230,12 +230,16 @@ class Proofreader:
         log.info("%s: %d packets for %d records", stage, len(packets), len(items))
         return {"stage": stage, "packets": len(packets), "records": len(items)}
 
-    def check(self, packet: dict[str, Any], reply: str) -> list[dict[str, Any]]:
-        """Validate an answer; returns decisions keyed by real record ids."""
+    def check(self, packet: dict[str, Any], reply: str, *, verify_batch: bool = True) -> list[dict[str, Any]]:
+        """Validate an answer; returns decisions keyed by real record ids.
+
+        ``verify_batch`` guards manual submits against pasting another packet's answer; automatic runs
+        skip it because models often garble the echoed hex id while the rest of the answer is fine.
+        """
         stage = packet["stage"]
         data = extract_json(reply)
         if isinstance(data, dict):
-            for key in ("batch_id", "stage"):
+            for key in ("batch_id", "stage") if verify_batch else ("stage",):
                 if data.get(key) not in (None, packet[key]):
                     raise ValueError(f"{key} mismatch: {data.get(key)!r}")
             data = data.get("records")
@@ -272,14 +276,15 @@ class Proofreader:
             raise ValueError(f"answer omitted ids {missing}")
         return list(result.values())
 
-    def submit(self, stage: str, batch_id: str, reply: str, reviewer: str = "manual") -> int:
+    def submit(self, stage: str, batch_id: str, reply: str, reviewer: str = "manual", *,
+               verify_batch: bool = True) -> int:
         packet = self.packets(stage).get(batch_id)
         if packet is None:
             raise ValueError(f"unknown batch {batch_id}")
         path = self._response_path(stage, batch_id)
         if path.exists():
             raise ValueError(f"batch {batch_id} already answered")
-        records = self.check(packet, reply)
+        records = self.check(packet, reply, verify_batch=verify_batch)
         write_json(path, {"stage": stage, "batch_id": batch_id, "reviewer": reviewer,
                           "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
                           "prompt_sha256": packet["prompt_sha256"], "response_sha256": sha256(reply),
@@ -316,7 +321,8 @@ class Proofreader:
                 reply = completion.text
                 self.store.add_usage(provider.type, completion.model, completion.usage,
                                      len(prompt) + len(self.data(packet)))
-                self.submit(stage, packet["batch_id"], completion.text, f"{provider.type}:{completion.model}")
+                self.submit(stage, packet["batch_id"], completion.text, f"{provider.type}:{completion.model}",
+                            verify_batch=False)
                 return True
             except (AuthError, QuotaExhausted) as exc:
                 if not self._stop.is_set():
@@ -360,6 +366,9 @@ class Proofreader:
 
     def export(self) -> dict[str, Any]:
         """Store accepted lines as ``proofread``; list everything else in ``review.json``."""
+        unfinished = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
+        if unfinished:
+            raise ValueError(f"proofreading is not finished (stage {unfinished[0]}): run `proofread run` again")
         snapshot_id = self.snapshot["snapshot_id"]
         notes = {stage: self.responses(stage) for stage in STAGES}
         exported = changed = 0
