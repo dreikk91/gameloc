@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import logging
+import re
 import sys
 from collections import Counter
 from datetime import datetime
@@ -108,7 +109,9 @@ def audit(cfg: Config, requeue: bool = False) -> dict[str, Any]:
     project, store = Project(cfg), Store(cfg.work_dir)
     masker = TagMasker.from_config(cfg.tags)
     validator = Validator(cfg, masker)
-    forbidden = [(term, variant) for term in Glossary.load(cfg).terms for variant in term.forbidden]
+    # a variant matches at the start of a word, so inflected forms count but "Ех" does not hit "брехуне"
+    forbidden = [(term, variant, re.compile(rf"(?<!\w){re.escape(variant.casefold())}"))
+                 for term in Glossary.load(cfg).terms for variant in term.forbidden]
     issues: list[dict[str, Any]] = []
     for record in project.records:
         text = store.translation(record)
@@ -116,8 +119,8 @@ def audit(cfg: Config, requeue: bool = False) -> dict[str, Any]:
             continue
         problems = validator.problems(record, text)
         folded = text.casefold()
-        problems += [f"'{variant}' should be '{term.target}'" for term, variant in forbidden
-                     if variant.casefold() in folded]
+        problems += [f"'{variant}' should be '{term.target}'" for term, variant, pattern in forbidden
+                     if pattern.search(folded)]
         if problems:
             issues.append({"id": record.id, "scene": record.scene, "source": record.source,
                            "translation": text, "problems": problems})
