@@ -17,6 +17,7 @@ from gameloc import (
 )
 from gameloc.formats import load_table
 from gameloc.records import Project
+from gameloc.text import Validator
 from gameloc.util import extract_json
 
 
@@ -114,6 +115,12 @@ def test_translate_resume_export(tmp_path: Path) -> None:
     Project(cfg).export(Store(cfg.work_dir))
     out = json.loads((tmp_path / "gameloc_work/output/strings.json").read_text(encoding="utf-8"))["strings"]
     assert [row.get("uk") for row in out] == ["Привіт<b></b>", "Привіт<b></b>", "Привіт{name}", None]
+
+
+def test_cyrillic_homoglyphs() -> None:
+    cfg = config_from_dict({"source": {"path": "x", "langs": {"en": "t"}}}, Path("."))
+    validator = Validator(cfg, TagMasker.from_config(cfg.tags))
+    assert validator.normalize("[panel=1]Несiть, сер Victor. OK, Pаз!") == "[panel=1]Несіть, сер Victor. OK, Раз!"
 
 
 def test_scene_packing(tmp_path: Path) -> None:

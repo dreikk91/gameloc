@@ -266,6 +266,7 @@ class Proofreader:
                 record = self.record(expected[local_id])
                 text = self.masker.unmask(item["translation"].strip(), self._tokens(record),
                                           self.cfg.tags.strict_order)
+                text = self.validator.normalize(text)
                 problems = self.validator.problems(record, text)
                 if problems:
                     raise ValueError(f"{local_id}: {'; '.join(problems)}")

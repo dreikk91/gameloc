@@ -229,6 +229,7 @@ class Translator:
                     errors[record.id] = str(exc)
                     failed.append(record)
                     continue
+                text = self.validator.normalize(text)
                 problems = self.validator.problems(record, text)
                 if problems:
                     errors[record.id] = "; ".join(problems)

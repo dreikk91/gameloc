@@ -29,6 +29,9 @@ EXTRA_FORBID = {
 }
 _LATIN_WORD = re.compile(r"[A-Za-z]+")
 _ROMAN = re.compile(r"[IVXLCDM]+")
+# Latin letters models slip into Cyrillic words ("Несiть"); fixed only inside words that contain Cyrillic
+_HOMOGLYPHS = str.maketrans("aceiopxyABCEHIKMOPTX", "асеіорхуАВСЕНІКМОРТХ")
+_CYRILLIC_WORD = re.compile(r"\w*[Ѐ-ӿ]\w*")
 _LETTER = re.compile(r"[^\W\d_]")
 
 
@@ -117,6 +120,13 @@ class Validator:
         latin = cfg.validate.latin
         self.latin = target in CYRILLIC_TARGETS if latin is None else latin
         self.allowed_latin = set(cfg.validate.allowed_latin)
+        self.cyrillic = target in CYRILLIC_TARGETS
+
+    def normalize(self, text: str) -> str:
+        """Replace Latin look-alike letters inside Cyrillic words (Cyrillic targets only)."""
+        if not self.cyrillic:
+            return text
+        return _CYRILLIC_WORD.sub(lambda m: m.group(0).translate(_HOMOGLYPHS), text)
 
     def contract(self, record: Record) -> str:
         """Source text whose tags the translation must reproduce."""
