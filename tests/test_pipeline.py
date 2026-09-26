@@ -15,9 +15,11 @@ from gameloc import (
     Translator,
     config_from_dict,
 )
+from gameloc.cli import audit, grep, show
 from gameloc.formats import load_table
-from gameloc.records import Project
-from gameloc.text import Validator
+from gameloc.glossary import Glossary
+from gameloc.records import Project, Record
+from gameloc.text import Validator, make_validator
 from gameloc.util import extract_json
 
 
@@ -167,3 +169,70 @@ def test_three_pass_proofread(tmp_path: Path) -> None:
     assert (result["exported"], result["changed"], result["needs_review"]) == (3, 2, 0)
     store = Store(cfg.work_dir)
     assert store.entries["a"]["text"] == "Вітаю<b></b>!" and store.entries["a"]["status"] == "proofread"
+
+
+def test_validator_charset_bytes_fit_plugin(tmp_path: Path) -> None:
+    (tmp_path / "widths.json").write_text(json.dumps({"ш": 3}), encoding="utf-8")
+    (tmp_path / "gl_test_checks.py").write_text(
+        "from gameloc.text import Validator\n\n"
+        "class NoX(Validator):\n"
+        "    def problems(self, record, text):\n"
+        "        return super().problems(record, text) + (['x is banned'] if 'x' in text else [])\n",
+        encoding="utf-8")
+    cfg = config_from_dict({"source": {"path": "x", "langs": {"en": "t"}},
+                            "validate": {"charset": "а-яіїєґА-ЯІЇЄҐ.,!", "length_encoding": "koi8-r",
+                                         "latin": False, "plugin": "gl_test_checks:NoX"},
+                            "fit": {"widths": "widths.json", "max_width": 5, "max_lines": 2,
+                                    "rules": [{"scene": "menu*", "wrap": False, "max_lines": 1}]}}, tmp_path)
+    validator = make_validator(cfg, TagMasker.from_config(cfg.tags))
+    assert type(validator).__name__ == "NoX"
+    line = Record(id="1", texts={"t": "Hi"}, scene="talk")
+    assert validator.problems(line, "аб вг") == []
+    assert validator.problems(line, "аб вг де жз ий") == ["too long: 3 lines, the box shows 2; make it shorter"]
+    assert validator.problems(line, "шш") == ["line 1 is 6 wide, max 5: shorten it"]  # widths file
+    assert validator.problems(line, "а@x") == ["characters missing from the game font: @x", "x is banned"]
+    assert validator.problems(Record(id="2", texts={"t": "A\nB"}, scene="menu1"), "аб\nвг") == [
+        "too long: 2 lines, the box shows 1; make it shorter"]  # scene rule: no wrap, one line
+    assert validator.problems(Record(id="3", texts={"t": "Hi"}, max_length=3), "абв") == []
+    assert validator.problems(Record(id="3", texts={"t": "Hi"}, max_length=3), "аі") == [
+        "cannot be encoded in koi8-r: 'і'"]
+
+
+def test_resolve_speech_replace_audit(tmp_path: Path) -> None:
+    data = _project(tmp_path)
+    (tmp_path / "chars.json").write_text(json.dumps(
+        [{"en": "Shion", "uk": "Шіон", "gender": "male", "speaks_as": "female"}]), encoding="utf-8")
+    (tmp_path / "terms.json").write_text(json.dumps([{"en": "Bye", "uk": "Бувай"}]), encoding="utf-8")
+    data["source"]["langs"] = {"en": {"field": "en", "replace": [["See you", "Bye"]]}}  # type: ignore[index]
+    data["glossary"]["terms"] = "terms.json"  # type: ignore[index]
+    cfg = config_from_dict(data, tmp_path)
+    assert Project(cfg).by_id["c"].texts["en"] == "Bye, {name}."
+    assert Glossary.load(cfg).speaker_label("Shion") == "Шіон [male; speaks as female]"
+    Translator(cfg, provider_factory=lambda: FakeProvider(_translation_answer())).run()
+    assert audit(cfg)["issues"] == 0
+    assert audit(cfg, terms=True)["issues"] == 3  # "Шіон" is lost in a and b, "Бувай" in c
+    assert [row.get("this") for row in show(cfg, "b", 1)] == [None, True, None]
+    assert [row["id"] for row in grep(cfg, r"привіт\{")] == ["c"]
+
+    def reviewer(system: str, user: str) -> str:
+        packet = json.loads(user.removeprefix("DATA="))
+        stage, records = packet["stage"], []
+        for view in packet["records"]:
+            decision = {"meaning": "ok", "edit": "keep", "verify": "accept", "resolve": "final"}[stage]
+            record = {"id": view["id"], "decision": decision, "note": "Добре."}
+            if stage == "verify" and view.get("markers") == ["{0}"]:
+                record["decision"] = "reject"
+            if stage == "resolve":
+                assert view["reason"] == "verify: reject" and view["review"]["verify"] == "Добре."
+                record["translation"] = "Бувай, {0}."
+            records.append(record)
+        return json.dumps({"stage": stage, "records": records}, ensure_ascii=False)
+
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1", provider_factory=lambda: FakeProvider(reviewer))
+    proofreader.prepare()
+    proofreader.run()
+    assert proofreader.export()["needs_review"] == 1
+    assert proofreader.run("resolve")["resolve"]["pending"] == 0
+    assert proofreader.export()["needs_review"] == 0
+    entry = Store(cfg.work_dir).entries["c"]
+    assert (entry["text"], entry["status"]) == ("Бувай, {name}.", "proofread") and "resolve" in entry["notes"]

@@ -16,7 +16,7 @@ from .prompts import translate_system
 from .providers import AuthError, ContextOverflow, Provider, ProviderError, QuotaExhausted, create_provider
 from .records import Project, Record
 from .store import Store
-from .text import TagMasker, Validator
+from .text import TagMasker, make_validator
 from .util import dumps, extract_json, pack_scenes
 
 log = logging.getLogger("gameloc")
@@ -49,7 +49,7 @@ class Translator:
         self.project = project or Project(cfg)
         self.store = store or Store(cfg.work_dir)
         self.masker = TagMasker.from_config(cfg.tags)
-        self.validator = Validator(cfg, self.masker)
+        self.validator = make_validator(cfg, self.masker)
         self.glossary = Glossary.load(cfg)
         options = cfg.provider_options(provider or cfg.translate.provider, model)
         self.provider_factory = provider_factory or (lambda: create_provider(options))
@@ -85,7 +85,7 @@ class Translator:
         if opts.group_by_scene:
             order: dict[str, int] = {}
             records = sorted(records, key=lambda r: order.setdefault(r.scene, len(order)))
-        budget = max(500, opts.max_chars - len(self.system) - _HEADER_RESERVE)
+        budget = opts.batch_chars or max(500, opts.max_chars - len(self.system) - _HEADER_RESERVE)
         return pack_scenes(records, lambda r: r.scene, lambda r: len(dumps(self._item(r, "0", False)[0])) + 1,
                            budget, max_items=opts.max_records, merge=opts.merge_scenes,
                            merge_max=opts.merge_max_lines)

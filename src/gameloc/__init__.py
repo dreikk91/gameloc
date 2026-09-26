@@ -20,12 +20,12 @@ from .providers import (
 )
 from .records import Project, Record
 from .store import Store
-from .text import TagMasker, Validator
+from .text import TagMasker, Validator, make_validator
 from .translate import Report, Translator
 
 __all__ = [
     "AuthError", "Completion", "Config", "ConfigError", "ContextOverflow", "Glossary", "Project",
     "Proofreader", "Provider", "ProviderError", "QuotaExhausted", "RateLimited", "Record", "Report",
-    "Store", "TagMasker", "Term", "TransientError", "Translator", "Validator", "__version__",
+    "Store", "TagMasker", "Term", "TransientError", "Translator", "Validator", "__version__", "make_validator",
     "config_from_dict", "create_provider", "load_config",
 ]
