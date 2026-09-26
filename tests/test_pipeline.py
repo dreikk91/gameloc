@@ -17,6 +17,7 @@ from gameloc import (
 )
 from gameloc.formats import load_table
 from gameloc.records import Project
+from gameloc.text import Validator
 from gameloc.util import extract_json
 
 
@@ -114,6 +115,32 @@ def test_translate_resume_export(tmp_path: Path) -> None:
     Project(cfg).export(Store(cfg.work_dir))
     out = json.loads((tmp_path / "gameloc_work/output/strings.json").read_text(encoding="utf-8"))["strings"]
     assert [row.get("uk") for row in out] == ["Привіт<b></b>", "Привіт<b></b>", "Привіт{name}", None]
+
+
+def test_cyrillic_homoglyphs() -> None:
+    cfg = config_from_dict({"source": {"path": "x", "langs": {"en": "t"}}}, Path("."))
+    validator = Validator(cfg, TagMasker.from_config(cfg.tags))
+    assert validator.normalize("[panel=1]Несiть, сер Victor. OK, Pаз!") == "[panel=1]Несіть, сер Victor. OK, Раз!"
+
+
+def test_scene_packing(tmp_path: Path) -> None:
+    rows = ([{"id": f"s{s}_{i}", "en": f"Line {i}", "scene": f"small{s}"} for s in range(3) for i in range(2)]
+            + [{"id": f"big_{i}", "en": f"Line {i}", "scene": "big"} for i in range(5)]
+            + [{"id": "tail", "en": "Bye", "scene": "small3"}])
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    cfg = config_from_dict({"source": {"path": "strings.json", "records": "strings", "scene": "scene",
+                                       "langs": {"en": "en"}},
+                            "translate": {"merge_max_lines": 3, "max_records": 5}}, tmp_path)
+    translator = Translator(cfg, provider_factory=lambda: FakeProvider(lambda s, u: "[]"))
+    batches = translator.batches(translator.pending())
+    assert [[r.scene for r in b] for b in batches] == [
+        ["small0"] * 2 + ["small1"] * 2,  # a third small scene would exceed max_records
+        ["small2"] * 2,                   # big scene (> merge_max_lines) goes alone
+        ["big"] * 5,
+        ["small3"],
+    ]
+    prompt = translator.build_prompt(batches[0])[0]
+    assert "SCENE: small0" in prompt and "SCENE: small1" in prompt and '"scene"' not in prompt
 
 
 def test_three_pass_proofread(tmp_path: Path) -> None:

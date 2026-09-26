@@ -123,6 +123,8 @@ class TranslateConfig:
     workers: int = 1
     group_by_scene: bool = True
     merge_scenes: bool = True
+    merge_max_lines: int = 0
+    """Only scenes with at most this many lines share a batch with other scenes (0 = any size)."""
     dedupe: bool = True
     reuse: bool = True
     log_responses: bool = True

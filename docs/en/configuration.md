@@ -125,7 +125,8 @@ Examples: `'\[[a-z_]+=[^\]]*\]'` (`[flag=x]`), `'#\w+#'`, `'\$[A-Z_]+\$'`, `'&[a
 | `attempts` | 3 | attempts per line (failed ones return with the error description) |
 | `workers` | 1 | parallel requests |
 | `group_by_scene` | `true` | keep scenes together in file order |
-| `merge_scenes` | `true` | small scenes may share a batch (each line is tagged with its scene) |
+| `merge_scenes` | `true` | small scenes may share a batch (each scene starts with a SCENE line) |
+| `merge_max_lines` | `0` | only scenes with at most this many lines are merged; longer scenes get their own batch (0 = any). A scene is split only when it alone exceeds the budget. Also used by proofreading |
 | `dedupe` | `true` | identical lines of the same speaker are translated once |
 | `reuse` | `true` | reuse the translation of an identical line from the checkpoint |
 | `log_responses` | `true` | write raw replies to `responses.jsonl` |
