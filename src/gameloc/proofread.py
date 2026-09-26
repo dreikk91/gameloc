@@ -1,4 +1,5 @@
-"""Three-pass, file-based, resumable proofreading: meaning -> edit -> verify.
+"""Three-pass, file-based, resumable proofreading: meaning -> edit -> verify, then an optional ``resolve``
+stage that settles the lines ``export`` left in ``review.json``.
 
 A run directory holds an immutable snapshot of the drafts plus, per stage,
 ``packets.jsonl`` (prompts) and ``responses/<batch>.json`` (validated answers).
@@ -23,17 +24,21 @@ from .prompts import proofread_system
 from .providers import AuthError, Provider, ProviderError, QuotaExhausted, create_provider
 from .records import Project, Record
 from .store import Store
-from .text import TagMasker, Validator
+from .text import TagMasker, make_validator
 from .util import dumps, extract_json, iter_jsonl, pack_scenes, read_json, sha256, write_json, write_text_atomic
 
 log = logging.getLogger("gameloc")
 
 STAGES = ("meaning", "edit", "verify")
+RESOLVE = "resolve"
+ALL_STAGES = (*STAGES, RESOLVE)
 DECISIONS = {
     "meaning": {"ok", "issue", "needs_review"},
     "edit": {"keep", "change", "needs_review"},
     "verify": {"accept", "reject", "needs_review"},
+    RESOLVE: {"final", "needs_review"},
 }
+_CHANGED = "draft or source changed since the snapshot"
 _HEADER_RESERVE = 2500
 
 
@@ -46,7 +51,7 @@ class Proofreader:
         self._project = project
         self.store = store or Store(cfg.work_dir)
         self.masker = TagMasker.from_config(cfg.tags)
-        self.validator = Validator(cfg, self.masker)
+        self.validator = make_validator(cfg, self.masker)
         self.glossary = Glossary.load(cfg)
         options = cfg.provider_options(provider or cfg.proofread.provider or cfg.translate.provider, model)
         self.provider_factory = provider_factory or (lambda: create_provider(options))
@@ -97,6 +102,12 @@ class Proofreader:
         if stage == "verify":
             view["before"] = self.masker.mask_like(draft, tokens)
             view["translation"] = self.masker.mask_like(extra.get("proposal") or draft, tokens)
+        elif stage == RESOLVE:
+            view["translation"] = self.masker.mask_like(draft, tokens)
+            if extra.get("proposal") and extra["proposal"] != draft:
+                view["proposal"] = self.masker.mask_like(extra["proposal"], tokens)
+            view["reason"] = extra["reason"]
+            view["review"] = extra["notes"]
         else:
             view["translation"] = self.masker.mask_like(draft, tokens)
         for key in ("semantic_note", "edit_note"):
@@ -126,12 +137,16 @@ class Proofreader:
     def data(packet: dict[str, Any]) -> str:
         return "DATA=" + dumps({k: v for k, v in packet.items() if k not in ("ids", "prompt_sha256")})
 
+    def _system(self, stage: str) -> str:
+        prompt: str | None = self.snapshot["prompts"].get(stage)
+        return prompt or proofread_system(self.cfg, stage)  # runs prepared before the resolve stage existed
+
     def render(self, packet: dict[str, Any]) -> str:
-        system: str = self.snapshot["prompts"][packet["stage"]]
-        return system + "\n\n" + self.data(packet)
+        return self._system(packet["stage"]) + "\n\n" + self.data(packet)
 
     def _pack(self, stage: str, items: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
-        budget = max(1000, self.snapshot["max_chars"] - len(self.snapshot["prompts"][stage]) - _HEADER_RESERVE)
+        budget = self.snapshot.get("batch_chars") or max(
+            1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE)
         opts = self.cfg.translate
         groups = pack_scenes(items, lambda item: str(item[1].get("scene", "")), lambda item: len(dumps(item[1])) + 8,
                              budget, merge=opts.merge_scenes, merge_max=opts.merge_max_lines)
@@ -189,7 +204,8 @@ class Proofreader:
                                   "draft": draft, "draft_hash": sha256(draft)}
         snapshot = {"schema": 1, "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
                     "target_lang": self.cfg.target_lang, "max_chars": self.cfg.proofread.max_chars,
-                    "prompts": {stage: proofread_system(self.cfg, stage) for stage in STAGES},
+                    "batch_chars": self.cfg.proofread.batch_chars,
+                    "prompts": {stage: proofread_system(self.cfg, stage) for stage in ALL_STAGES},
                     "records": records}
         snapshot["snapshot_id"] = sha256(dumps(snapshot))[:16]
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -203,7 +219,10 @@ class Proofreader:
         return report
 
     def advance(self, stage: str) -> dict[str, Any]:
-        """Build the packets of ``edit`` or ``verify`` from the previous stage's answers."""
+        """Build the packets of ``edit`` or ``verify`` from the previous stage's answers
+        (``resolve``: from the lines ``export`` left in ``review.json``)."""
+        if stage == RESOLVE:
+            return self._advance_resolve()
         index = STAGES.index(stage)
         if index == 0:
             raise ValueError("meaning packets are created by prepare")
@@ -229,6 +248,19 @@ class Proofreader:
         self._save_packets(stage, packets)
         log.info("%s: %d packets for %d records", stage, len(packets), len(items))
         return {"stage": stage, "packets": len(packets), "records": len(items)}
+
+    def _advance_resolve(self) -> dict[str, Any]:
+        if self.packets(RESOLVE):
+            raise ValueError("resolve packets already exist")
+        path = self.run_dir / "review.json"
+        if not path.exists():
+            raise ValueError("run `proofread export` first: resolve works on its review.json")
+        items = [(entry["id"], self._view(entry["id"], RESOLVE, entry)) for entry in read_json(path)
+                 if entry["id"] in self.snapshot["records"] and entry["reason"] != _CHANGED]
+        packets = self._pack(RESOLVE, items)
+        self._save_packets(RESOLVE, packets)
+        log.info("%s: %d packets for %d records", RESOLVE, len(packets), len(items))
+        return {"stage": RESOLVE, "packets": len(packets), "records": len(items)}
 
     def check(self, packet: dict[str, Any], reply: str, *, verify_batch: bool = True) -> list[dict[str, Any]]:
         """Validate an answer; returns decisions keyed by real record ids.
@@ -260,9 +292,9 @@ class Proofreader:
             if not isinstance(note, str) or not note.strip():
                 raise ValueError(f"{local_id}: every decision needs a note")
             clean: dict[str, Any] = {"id": expected[local_id], "decision": decision, "note": note.strip()}
-            if stage == "edit" and decision == "change":
+            if (stage, decision) in (("edit", "change"), (RESOLVE, "final")):
                 if not isinstance(item.get("translation"), str):
-                    raise ValueError(f"{local_id}: change requires translation")
+                    raise ValueError(f"{local_id}: {decision} requires translation")
                 record = self.record(expected[local_id])
                 text = self.masker.unmask(item["translation"].strip(), self._tokens(record),
                                           self.cfg.tags.strict_order)
@@ -312,7 +344,7 @@ class Proofreader:
         if self._stop.is_set():
             return False
         provider = self._provider()
-        system = self.snapshot["prompts"][stage]
+        system = self._system(stage)
         error = reply = ""
         for attempt in range(1, self.cfg.proofread.attempts + 1):
             prompt = system if not error else (
@@ -359,19 +391,20 @@ class Proofreader:
 
     def status(self) -> dict[str, Any]:
         report: dict[str, Any] = {"records": len(self.snapshot["records"])}
-        for stage in STAGES:
+        for stage in STAGES + ((RESOLVE,) if self.packets(RESOLVE) else ()):
             decisions = self.responses(stage)
             report[stage] = {"packets": len(self.packets(stage)), "pending": len(self.pending_packets(stage)),
                              "decisions": dict(Counter(d["decision"] for d in decisions.values()))}
         return report
 
     def export(self) -> dict[str, Any]:
-        """Store accepted lines as ``proofread``; list everything else in ``review.json``."""
+        """Store accepted (or resolved) lines as ``proofread``; list everything else in ``review.json``."""
         unfinished = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
+        unfinished += [RESOLVE] if self.pending_packets(RESOLVE) else []
         if unfinished:
             raise ValueError(f"proofreading is not finished (stage {unfinished[0]}): run `proofread run` again")
         snapshot_id = self.snapshot["snapshot_id"]
-        notes = {stage: self.responses(stage) for stage in STAGES}
+        notes = {stage: self.responses(stage) for stage in ALL_STAGES}
         exported = changed = 0
         review: list[dict[str, Any]] = []
         for record_id, item in self.snapshot["records"].items():
@@ -380,12 +413,20 @@ class Proofreader:
             if entry.get("status") == "proofread" and entry.get("snapshot") == snapshot_id:
                 continue
             reached = {stage: notes[stage][record_id] for stage in STAGES if record_id in notes[stage]}
+            resolved = notes[RESOLVE].get(record_id)
             current = self.store.translation(record)
             verdict = reached.get("verify", {}).get("decision")
             final = reached.get("edit", {}).get("translation") or item["draft"]
             reason = ""
             if current is None or sha256(current) != item["draft_hash"]:
-                reason = "draft or source changed since the snapshot"
+                reason = _CHANGED
+            elif resolved and resolved["decision"] == "final":
+                reached[RESOLVE] = resolved
+                final = resolved["translation"]
+                reason = "; ".join(self.validator.problems(record, final))
+            elif resolved:
+                reached[RESOLVE] = resolved
+                reason = f"{RESOLVE}: {resolved['decision']}"
             elif verdict != "accept":
                 last = next(iter(reversed(reached.values())), None)
                 reason = f"{list(reached)[-1]}: {last['decision']}" if last else "not reviewed"

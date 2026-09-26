@@ -121,21 +121,29 @@ The module must be importable (an installed package or a directory on `PYTHONPAT
 
 ## Custom validation rules
 
-`Validator.problems(record, text) -> list[str]` can be extended by subclassing:
+`Validator.problems(record, text) -> list[str]` can be extended by subclassing, e.g. in `checks.py` next to
+`gameloc.toml`:
 
 ```python
-from gameloc import Translator, Validator
+from gameloc import Validator
 
 class MyValidator(Validator):
     def problems(self, record, text):
         issues = super().problems(record, text)
-        if text.count("\n") > 2:
-            issues.append("the dialogue box fits at most 3 lines")
+        if record.speaker == "Narrator" and "!" in text:
+            issues.append("the narrator never exclaims")
         return issues
 
-translator = Translator(cfg)
-translator.validator = MyValidator(cfg, translator.masker)
 ```
+
+```toml
+[validate]
+plugin = "checks:MyValidator"
+```
+
+Every command then uses it: translation, proofreading, `audit`, `sheet-import`. In code, `make_validator(cfg, masker)`
+returns the configured validator. Many box checks need no code at all: see `[fit]` and `charset` in
+[configuration](configuration.md).
 
 ## Publishing to PyPI
 

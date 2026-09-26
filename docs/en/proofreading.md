@@ -66,6 +66,21 @@ gameloc proofread status
 
 Manual and automatic answers can be mixed within one run.
 
+## Resolving the rest
+
+`export` leaves lines that stages could not settle (verify `reject`, `needs_review`, a failed check) in `review.json`.
+`resolve` is a fourth stage for them: the model sees the sources, the current text, the rejected proposal, the reason
+and every reviewer note, and writes the final text (`final` + translation, validated like `change`) or `needs_review`.
+
+```bash
+gameloc proofread export                 # writes review.json
+gameloc proofread resolve                # answers resolve packets, then exports again
+gameloc proofread next resolve           # or by hand / with an outside agent: next + submit
+```
+
+Edit `review.json` before `resolve` to drop lines a human should handle. Lines whose draft changed since
+the snapshot are skipped.
+
 ## After proofreading
 
 `review.json` lists, for every line that did not pass, the reason, the source, the draft, the proposal and the notes of all stages.
@@ -78,4 +93,8 @@ gameloc sheet-import review.csv           # validation + status "manual"
 ```
 
 `gameloc audit` checks the whole checkpoint (tags, scripts, Latin words, length, forbidden glossary variants);
-`audit --requeue` sends problematic lines back for translation.
+`audit --terms` also reports glossary terms of the source whose translation (by word start, so inflected forms
+count) is missing; `audit --requeue` sends problematic lines back for translation.
+
+To look a line up: `gameloc show <id> --context 3` prints it with its neighbours, sources and translations;
+`gameloc grep 'regex'` searches sources and translations.

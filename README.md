@@ -20,7 +20,8 @@ From there the pipeline is the same for Unity, Unreal Engine 5 and custom engine
   run it again, and it continues where it stopped. When the source text changes, the line is translated again.
 - **Tag protection**: `<color>`, `{0}`, `{Name}`, `%d`, `\n` and your own regexes are masked as `{0}`, `{1}`…
   and verified after translation.
-- **Validation**: tags, forbidden characters (CJK; Russian-only letters for Ukrainian), untranslated Latin words,
+- **Validation**: tags, forbidden characters (CJK; Russian-only letters for Ukrainian), characters missing from the
+  game font, dialogue box fit (pixel widths, word wrap, line count), byte limits, untranslated Latin words,
   line length limits. Rejected lines go back to the model together with the error.
 - **Context**: scene grouping, speaker with grammatical gender, character profiles and glossary entries —
   only those relevant to the current batch.
@@ -81,10 +82,11 @@ rpm = 10
 | `status` | progress: translated / pending / stale, top pending scenes |
 | `translate [--scene S] [--ids ...] [--limit N] [--provider P] [--model M] [--workers N] [--retranslate] [--dry-run]` | translate |
 | `test [--provider P]` | send a tiny request to a provider |
-| `audit [--requeue]` | re-validate stored translations, find forbidden glossary variants |
+| `audit [--requeue] [--terms]` | re-validate stored translations, find forbidden glossary variants (and missing terms) |
+| `show ID [--context N]` / `grep REGEX` | a line with its neighbours / search sources and translations |
 | `export` | write translations into the game files (`[output]`) |
 | `sheet-export FILE.csv` / `sheet-import FILE.csv` | spreadsheet round trip for human editors |
-| `proofread prepare / run / advance / next / submit / status / export` | three-pass proofreading |
+| `proofread prepare / run / advance / next / submit / status / export / resolve` | three-pass proofreading; `resolve` settles `review.json` |
 | `stats` | requests and tokens per provider/model |
 
 Global options: `-c path/to/config.toml`, `-v` (verbose log).
