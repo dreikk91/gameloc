@@ -414,12 +414,15 @@ class Proofreader:
         return False
 
     def chains(self, packets: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-        """Consecutive packets of one scene (a scene too large for one packet)
-        are answered in order by one worker; the rest run in parallel."""
+        """Consecutive packets of one dialogue scene (one with speakers, too
+        large for one packet) are answered in order by one worker; the rest,
+        including split menus and tables, run in parallel."""
+        records = self.snapshot["records"]
+        dialogue = {item["scene"] for item in records.values() if item["scene"] and item["speaker"]}
         chains: list[list[dict[str, Any]]] = []
         previous: set[str] = set()
         for packet in packets:
-            scenes = {self.snapshot["records"][rid]["scene"] for rid in packet["ids"]} - {""}
+            scenes = {records[rid]["scene"] for rid in packet["ids"]} & dialogue
             if chains and scenes & previous:
                 chains[-1].append(packet)
             else:
@@ -436,7 +439,7 @@ class Proofreader:
                     raise ValueError("run prepare first")
                 self.advance(current)
             pending = self.pending_packets(current)[: limit or None]
-            chains = self.chains(pending)
+            chains = sorted(self.chains(pending), key=len, reverse=True)  # long scenes first: shorter tail
             workers = max(1, min(self.cfg.proofread.workers, len(chains) or 1))
             numbered = {id(packet): index for index, packet in enumerate(pending, 1)}
 
