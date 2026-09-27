@@ -208,8 +208,8 @@ class Proofreader:
         seen: set[str] = set()
         for record_id in record_ids:
             scene = records[record_id]["scene"]
-            if not scene or scene in seen:
-                continue
+            if not scene or scene in seen or scene not in self._dialogue_scenes():
+                continue  # menus and tables need no preceding lines
             seen.add(scene)
             start = position[record_id]
             result += [rid for rid in order[max(0, start - count):start]
@@ -471,7 +471,7 @@ class Proofreader:
         large for one packet) are answered in order by one worker; the rest,
         including split menus and tables, run in parallel."""
         records = self.snapshot["records"]
-        dialogue = {item["scene"] for item in records.values() if item["scene"] and item["speaker"]}
+        dialogue = self._dialogue_scenes()
         chains: list[list[dict[str, Any]]] = []
         previous: set[str] = set()
         for packet in packets:
