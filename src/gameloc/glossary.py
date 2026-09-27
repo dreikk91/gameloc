@@ -190,6 +190,7 @@ class Glossary:
         scene_raw = "\n".join(scene_texts)
         if scene_raw:
             scene_folded = scene_raw.casefold()
-            characters += [term for term in self.terms if term.character and term not in characters
-                           and term.matches(scene_raw, scene_folded)]
+            for term in self.terms:
+                if term.character and term not in characters and term.matches(scene_raw, scene_folded):
+                    characters.append(term)
         return characters[: self.max_characters], terms[: self.max_terms]

@@ -145,18 +145,19 @@ def test_scene_packing(tmp_path: Path) -> None:
     assert "SCENE: small0" in prompt and "SCENE: small1" in prompt and '"scene"' not in prompt
 def test_scene_cast_and_earlier_lines(tmp_path: Path) -> None:
     (tmp_path / "strings.json").write_text(json.dumps({"strings": [
-        {"id": "1", "en": "Rufus, wait!", "who": "Alicia", "scene": "ev1"},
+        {"id": "1", "en": "Rufus, wait! Odin is coming!", "who": "Alicia", "scene": "ev1"},
         {"id": "2", "en": "What now?", "who": "Rufus", "scene": "ev1"},
         {"id": "3", "en": "Where have you been?", "who": "Rufus", "scene": "ev1"},
         {"id": "4", "en": "Potion", "scene": "menu"},
     ]}), encoding="utf-8")
     (tmp_path / "chars.json").write_text(json.dumps([
         {"en": "Alicia", "uk": "Алісія", "gender": "female"},
-        {"en": "Rufus", "uk": "Руфус", "gender": "male"}]), encoding="utf-8")
+        {"en": "Rufus", "uk": "Руфус", "gender": "male"},
+        {"en": "Odin", "uk": "Одін", "gender": "male"}]), encoding="utf-8")
     data = {"game": "Test", "target_lang": "uk",
             "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
                        "langs": {"en": "en"}},
-            "output": {"field": "uk"}, "glossary": {"characters": "chars.json"},
+            "output": {"field": "uk"}, "glossary": {"characters": "chars.json", "terms": "chars.json"},
             "translate": {"context_lines": 2}}
     translator = Translator(config_from_dict(data, tmp_path),
                             provider_factory=lambda: FakeProvider(lambda s, u: "[]"))
@@ -164,8 +165,9 @@ def test_scene_cast_and_earlier_lines(tmp_path: Path) -> None:
     prompt, _ = translator.build_prompt([translator.project.by_id["3"]])
     # Alicia only speaks outside the batch, yet she is in the cast and in the earlier lines
     assert "- Alicia → Алісія [female]" in prompt and "- Rufus → Руфус [male]" in prompt
+    assert prompt.count("- Odin → Одін") == 1  # mentioned elsewhere in the scene, listed once
     earlier = prompt.split("EARLIER LINES")[1].split("ITEMS:")[0]
-    assert '"speaker":"Алісія [female]","en":"Rufus, wait!","uk":"Руфусе, стривай!"' in earlier
+    assert '"speaker":"Алісія [female]","en":"Rufus, wait! Odin is coming!","uk":"Руфусе, стривай!"' in earlier
     assert '"What now?"' in earlier and "Where have you been" not in earlier
     # scenes without speakers get no cast from the rest of the scene
     menu, _ = translator.build_prompt([translator.project.by_id["4"]])
