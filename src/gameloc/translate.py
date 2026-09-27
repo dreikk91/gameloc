@@ -342,9 +342,32 @@ class Translator:
             return report
         log.info("%d records to translate in %d batches", len(todo), len(batches))
         workers = max(1, self.cfg.translate.workers)
+        numbered = list(enumerate(batches, 1))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="translate") as pool:
-            futures = [pool.submit(self._run_batch, batch, index, len(batches), report)
-                       for index, batch in enumerate(batches, 1)]
+            futures = [pool.submit(self._run_chain, chain, len(batches), report)
+                       for chain in self.chains(numbered)]
             for future in futures:
                 future.result()
         return report
+
+    def chains(self, numbered: list[tuple[int, list[Record]]]) -> list[list[tuple[int, list[Record]]]]:
+        """Batches that share a dialogue scene (one with speakers) run one after
+        another in one worker, so a batch that continues a scene sees the
+        previous one's translations in its EARLIER LINES; other batches, and
+        menus or tables without speakers, still run in parallel."""
+        def dialogue(batch: list[Record]) -> set[str]:
+            by_scene = self.project.by_scene
+            return {r.scene for r in batch if r.scene and any(x.speaker for x in by_scene.get(r.scene, []))}
+
+        chains: list[list[tuple[int, list[Record]]]] = []
+        for item in numbered:
+            scenes = dialogue(item[1])
+            if chains and scenes & dialogue(chains[-1][-1][1]):
+                chains[-1].append(item)
+            else:
+                chains.append([item])
+        return chains
+
+    def _run_chain(self, chain: list[tuple[int, list[Record]]], total: int, report: Report) -> None:
+        for index, batch in chain:
+            self._run_batch(batch, index, total, report)

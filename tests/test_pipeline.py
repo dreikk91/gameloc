@@ -265,3 +265,27 @@ def test_resolve_speech_replace_audit(tmp_path: Path) -> None:
     assert proofreader.export()["needs_review"] == 0
     entry = Store(cfg.work_dir).entries["c"]
     assert (entry["text"], entry["status"]) == ("Бувай, {name}.", "proofread") and "resolve" in entry["notes"]
+
+
+def test_dialogue_scene_batches_run_in_order(tmp_path: Path) -> None:
+    rows = [{"id": str(i), "en": f"Line number {i}.", "who": "Rufus", "scene": "ev1"} for i in range(6)]
+    rows += [{"id": f"m{i}", "en": f"Menu item {i}", "scene": "menu"} for i in range(6)]
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    data = {"game": "Test", "target_lang": "uk",
+            "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
+                       "langs": {"en": "en"}},
+            "output": {"field": "uk"}, "translate": {"max_records": 2, "merge_scenes": False,
+                                                     "context_lines": 2, "workers": 4}}
+    seen: list[str] = []
+
+    def answer(system: str, user: str) -> str:
+        seen.append(user)
+        items = [json.loads(line) for line in user.splitlines() if line.startswith('{"id"')]
+        return json.dumps([{"id": item["id"], "text": "Рядок " + item["en"][-2]} for item in items])
+
+    translator = Translator(config_from_dict(data, tmp_path), provider_factory=lambda: FakeProvider(answer))
+    chains = translator.chains(list(enumerate(translator.batches(translator.pending()), 1)))
+    assert [len(chain) for chain in chains] == [3, 1, 1, 1]  # ev1 in one chain, menu batches apart
+    translator.run()
+    later = [u for u in seen if '"en":"Line number 4."' in u][0]
+    assert '"uk":"Рядок 3"' in later  # the previous batch was already translated
