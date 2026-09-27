@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import fnmatch
+import importlib
 import re
+import sys
 from collections import Counter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .util import read_json
 
 if TYPE_CHECKING:
     from .config import Config, TagConfig
@@ -33,6 +38,7 @@ _ROMAN = re.compile(r"[IVXLCDM]+")
 _HOMOGLYPHS = str.maketrans("aceiopxyABCEHIKMOPTX", "асеіорхуАВСЕНІКМОРТХ")
 _CYRILLIC_WORD = re.compile(r"\w*[Ѐ-ӿ]\w*")
 _LETTER = re.compile(r"[^\W\d_]")
+_BREAKS = {"\n", "\r\n", "\r", "\\n"}  # line-break tags, incl. a literal backslash-n
 
 
 class TagMasker:
@@ -121,12 +127,72 @@ class Validator:
         self.latin = target in CYRILLIC_TARGETS if latin is None else latin
         self.allowed_latin = set(cfg.validate.allowed_latin)
         self.cyrillic = target in CYRILLIC_TARGETS
+        self.length_encoding = cfg.validate.length_encoding
+        charset = cfg.validate.charset
+        self.outside_charset = re.compile(rf"[^\s{charset}]") if charset else None
+        self.cfg = cfg
+        self._widths: dict[str, dict[str, int]] = {}
 
     def normalize(self, text: str) -> str:
         """Replace Latin look-alike letters inside Cyrillic words (Cyrillic targets only)."""
         if not self.cyrillic:
             return text
         return _CYRILLIC_WORD.sub(lambda m: m.group(0).translate(_HOMOGLYPHS), text)
+
+    def fit_options(self, record: Record) -> dict[str, Any]:
+        """``[fit]`` settings of the record's scene: the first matching rule overrides the defaults."""
+        fit = self.cfg.fit
+        options: dict[str, Any] = {"widths": fit.widths, "default_width": fit.default_width,
+                                   "max_width": fit.max_width, "max_lines": fit.max_lines, "wrap": fit.wrap}
+        for rule in fit.rules:
+            if fnmatch.fnmatchcase(record.scene, rule["scene"]):
+                options.update({k: v for k, v in rule.items() if k != "scene"})
+                break
+        return options
+
+    def width(self, line: str, options: dict[str, Any]) -> int:
+        path = options["widths"]
+        if path and path not in self._widths:
+            self._widths[path] = {str(k): int(v) for k, v in read_json(self.cfg.resolve(path)).items()}
+        table = self._widths.get(path, {}) if path else {}
+        default = options["default_width"]
+        return sum(table.get(char, default) for char in line)
+
+    def lines(self, text: str, options: dict[str, Any]) -> list[str]:
+        """Screen lines of a text: tags removed, line-break tags kept, word-wrapped when the game wraps."""
+        if self.masker.regex:
+            text = self.masker.regex.sub(lambda m: "\n" if m.group(0) in _BREAKS else "", text)
+        hard = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        if not options["wrap"] or not options["max_width"]:
+            return hard
+        result: list[str] = []
+        for line in hard:
+            current = ""
+            for word in line.split(" "):
+                candidate = f"{current} {word}" if current else word
+                if current and self.width(candidate, options) > options["max_width"]:
+                    result.append(current)
+                    current = word
+                else:
+                    current = candidate
+            result.append(current)
+        return result
+
+    def fit_problems(self, record: Record, text: str) -> list[str]:
+        options = self.fit_options(record)
+        max_width, max_lines = options["max_width"], options["max_lines"]
+        if not max_width and not max_lines:
+            return []
+        lines = self.lines(text, options)
+        issues: list[str] = []
+        if max_lines and len(lines) > max_lines:
+            issues.append(f"too long: {len(lines)} lines, the box shows {max_lines}; make it shorter")
+        if max_width:
+            for number, line in enumerate(lines, 1):
+                if (width := self.width(line, options)) > max_width:
+                    issues.append(f"line {number} is {width} wide, max {max_width}: shorten it"
+                                  + ("" if options["wrap"] else " or re-break the lines"))
+        return issues
 
     def contract(self, record: Record) -> str:
         """Source text whose tags the translation must reproduce."""
@@ -157,8 +223,37 @@ class Validator:
             issues.append(f"tags differ: missing {missing}, extra {extra}")
         elif self.strict_order and source_tags != target_tags:
             issues.append("tag order changed")
+        if self.outside_charset:
+            bad = self.outside_charset.findall(visible)
+            if bad:
+                issues.append(f"characters missing from the game font: {''.join(dict.fromkeys(bad))}")
         if self.check_length and record.max_length:
-            length = self.masker.visible_length(text)
+            if self.length_encoding:  # a storage limit: the whole stored text, tags included
+                try:
+                    length = len(text.encode(self.length_encoding))
+                except UnicodeEncodeError as exc:
+                    length = 0
+                    issues.append(f"cannot be encoded in {self.length_encoding}: {exc.object[exc.start:exc.end]!r}")
+                unit = " bytes"
+            else:
+                length, unit = self.masker.visible_length(text), ""
             if length > record.max_length:
-                issues.append(f"too long: {length} > {record.max_length}")
+                issues.append(f"too long: {length} > {record.max_length}{unit}")
+        issues += self.fit_problems(record, text)
         return issues
+
+
+def make_validator(cfg: Config, masker: TagMasker) -> Validator:
+    """The project's validator: ``[validate] plugin`` (a Validator subclass) or the built-in one."""
+    target = cfg.validate.plugin
+    if not target:
+        return Validator(cfg, masker)
+    module, _, attr = target.partition(":")
+    root = str(cfg.root)
+    if root not in sys.path:  # project-local modules such as tools/checks.py
+        sys.path.insert(0, root)
+    cls = getattr(importlib.import_module(module), attr)
+    if not (isinstance(cls, type) and issubclass(cls, Validator)):
+        raise ValueError(f"validate.plugin {target!r} is not a gameloc.text.Validator subclass")
+    validator: Validator = cls(cfg, masker)
+    return validator

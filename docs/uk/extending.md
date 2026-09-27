@@ -118,21 +118,29 @@ en = "text"
 
 ## Власні правила перевірки
 
-`Validator.problems(record, text) -> list[str]` можна розширити наслідуванням і передати свій екземпляр:
+`Validator.problems(record, text) -> list[str]` можна розширити наслідуванням, наприклад у `checks.py` поруч
+із `gameloc.toml`:
 
 ```python
-from gameloc import Translator, Validator
+from gameloc import Validator
 
 class MyValidator(Validator):
     def problems(self, record, text):
         issues = super().problems(record, text)
-        if text.count("\n") > 2:
-            issues.append("діалогове вікно вміщує максимум 3 рядки")
+        if record.speaker == "Narrator" and "!" in text:
+            issues.append("оповідач ніколи не вигукує")
         return issues
 
-translator = Translator(cfg)
-translator.validator = MyValidator(cfg, translator.masker)
 ```
+
+```toml
+[validate]
+plugin = "checks:MyValidator"
+```
+
+Тоді його використовують усі команди: переклад, редактура, `audit`, `sheet-import`. У коді `make_validator(cfg, masker)`
+повертає налаштований валідатор. Багато перевірок вікна не потребують коду взагалі: див. `[fit]` і `charset` у
+[конфігурації](configuration.md).
 
 ## Публікація на PyPI
 

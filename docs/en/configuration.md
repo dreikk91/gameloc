@@ -61,6 +61,17 @@ field = "text"
 
 For languages other than `tag_lang`, tags are stripped from the prompt so the model sees one set of markers only.
 
+`replace` cleans a language's text on load, e.g. spaces the game uses to wrap Japanese lines:
+
+```toml
+[source.langs.ja]
+field = "ja"
+replace = [['(?<=[、。！？…])\s+', '']]   # [regex, replacement] pairs
+```
+
+The cleaned text is what the model sees and what the checkpoint hashes: changing `replace` later marks
+the affected lines as stale.
+
 ## `[output]` — where to write
 
 | Key | Description |
@@ -89,6 +100,7 @@ The file layout is free-form — fields are looked up by common names:
 | aliases | `aliases`, `alias`, fields of the other source languages; `"A / B"` is split |
 | description | `description`, `description_<target>`, `note`, `role`, `voice`, `category` |
 | gender | `gender`, `sex` (`male/female/m/f/чоловіча/жіноча/...`) |
+| speech gender | `speech_gender`, `speaks_as`: how the character talks about themselves when it differs from `gender` (prompt label `[male; speaks as female]`) |
 | forbidden variants | `forbidden`, `consistency_rules[].variant` (used by `audit`) |
 
 Container: a list, an object with a `terms`/`characters`/`entries`/`glossary`/`items` list, or a map `"Shion": "Шіон"`.
@@ -114,6 +126,31 @@ Examples: `'\[[a-z_]+=[^\]]*\]'` (`[flag=x]`), `'#\w+#'`, `'\$[A-Z_]+\$'`, `'&[a
 | `latin` | `true` for Cyrillic targets | Latin words absent from the source are an error |
 | `allowed_latin` | `[]` | allowed Latin words (`HP`, `OK`, brand names) |
 | `max_length` | `true` | check the length limit from `source.max_length` |
+| `length_encoding` | — | count `max_length` in bytes of this codec (`cp1251`, `shift_jis`...), tags included: for fixed-size records |
+| `charset` | — | regex character-class body of every character the game font has, e.g. `' -~А-ЩЬЮЯҐЄІЇа-щьюяґєії’«»—…'`; anything else is an error |
+| `plugin` | — | `module:Class`, a `Validator` subclass used by every command (translate, proofread, audit, sheet-import). Modules next to the config file are importable. See [extending](extending.md#custom-validation-rules) |
+
+## `[fit]` — does the text fit its box
+
+For games with fixed dialogue boxes, subtitles or buttons. Off until `max_width` or `max_lines` is set.
+
+```toml
+[fit]
+widths = "font_widths.json"   # {"A": 7, "і": 3, ...}; without it every character is 1 wide
+default_width = 8             # width of characters missing from the file
+max_width = 440               # widest line (pixels, or characters without widths)
+max_lines = 3
+wrap = true                   # the game wraps at spaces; false: only existing line breaks count
+
+[[fit.rules]]                 # the first rule whose scene glob matches overrides the keys above
+scene = "LSD_*"
+widths = "subtitle_widths.json"
+max_width = 480
+max_lines = 2
+```
+
+Tags have no width; line-break tags (`\n`, literal `\\n`) start a new line. A translation that does not fit
+goes back to the model with the reason ("3 lines, the box shows 2"), like any other validation error.
 
 ## `[translate]`
 
@@ -130,10 +167,13 @@ Examples: `'\[[a-z_]+=[^\]]*\]'` (`[flag=x]`), `'#\w+#'`, `'\$[A-Z_]+\$'`, `'&[a
 | `dedupe` | `true` | identical lines of the same speaker are translated once |
 | `reuse` | `true` | reuse the translation of an identical line from the checkpoint |
 | `log_responses` | `true` | write raw replies to `responses.jsonl` |
+| `batch_chars` | `0` | characters of line data per batch; replaces the budget derived from `max_chars` (0 = derive) |
 
 ## `[proofread]`
 
-`provider`, `max_chars` (12000), `attempts` (2), `workers` (1). See [proofreading](proofreading.md).
+`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `batch_chars` (0: characters of record data per packet,
+e.g. `8000` for whole scenes of about that size, instead of subtracting the prompt from `max_chars`).
+See [proofreading](proofreading.md).
 
 ## `[prompt]`
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -43,6 +44,12 @@ class LangSource:
     format: str = "auto"
     records: str = ""
     id: str | None = None
+    replace: list[list[str]] = dataclasses.field(default_factory=list)  # "field" is shadowed here
+    """``[regex, replacement]`` pairs applied to this language's text on load (e.g. wrap spaces in CJK)."""
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(pair, list) or len(pair) != 2 for pair in self.replace):
+            raise ConfigError(f"source.langs {self.field!r}: replace must be a list of [regex, replacement] pairs")
 
 
 @dataclass
@@ -112,6 +119,40 @@ class ValidateConfig:
     """Reject Latin words absent from the sources (default: on for Cyrillic targets)."""
     allowed_latin: list[str] = field(default_factory=list)
     max_length: bool = True
+    length_encoding: str | None = None
+    """Count ``max_length`` in bytes of this codec (``cp1251``, ``shift_jis``...) instead of characters."""
+    charset: str | None = None
+    """Regex character-class body of every visible character the game font has, e.g. `` -~А-ЩЬЮЯҐЄІЇа-щьюяґєії``."""
+    plugin: str | None = None
+    """``module:Class``, a :class:`~gameloc.text.Validator` subclass used by every command."""
+
+
+_FIT_KEYS = {"widths", "default_width", "max_width", "max_lines", "wrap"}
+
+
+@dataclass
+class FitConfig:
+    """Does the text fit its box: width in pixels (or characters) per line and a line count."""
+
+    widths: str | None = None
+    """JSON file ``{"A": 7, ...}`` with the advance of each character; without it every character is 1 wide."""
+    default_width: int = 1
+    max_width: int = 0
+    """Widest line; 0 turns the check off."""
+    max_lines: int = 0
+    """0 = any number of lines."""
+    wrap: bool = True
+    """The game wraps lines itself (at spaces); otherwise only the existing line breaks count."""
+    rules: list[dict[str, Any]] = field(default_factory=list)
+    """Overrides for scenes matching ``scene`` (a glob): ``{scene = "LSD_*", max_width = 480, max_lines = 2}``."""
+
+    def __post_init__(self) -> None:
+        for rule in self.rules:
+            if not isinstance(rule, dict) or not isinstance(rule.get("scene"), str):
+                raise ConfigError("[fit] every rule needs a scene glob")
+            unknown = sorted(set(rule) - _FIT_KEYS - {"scene"})
+            if unknown:
+                raise ConfigError(f"[fit] rule {rule['scene']!r}: unknown keys: {', '.join(unknown)}")
 
 
 @dataclass
@@ -128,6 +169,8 @@ class TranslateConfig:
     dedupe: bool = True
     reuse: bool = True
     log_responses: bool = True
+    batch_chars: int = 0
+    """Characters of line data per batch; overrides the budget derived from max_chars (0 = derive)."""
 
 
 @dataclass
@@ -136,6 +179,8 @@ class ProofreadConfig:
     max_chars: int = 12000
     attempts: int = 2
     workers: int = 1
+    batch_chars: int = 0
+    """Characters of record data per packet (whole scenes); overrides the budget derived from max_chars."""
 
 
 @dataclass
@@ -160,6 +205,7 @@ class Config:
     glossary: GlossaryConfig = field(default_factory=GlossaryConfig)
     tags: TagConfig = field(default_factory=TagConfig)
     validate: ValidateConfig = field(default_factory=ValidateConfig)
+    fit: FitConfig = field(default_factory=FitConfig)
     translate: TranslateConfig = field(default_factory=TranslateConfig)
     proofread: ProofreadConfig = field(default_factory=ProofreadConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
@@ -241,7 +287,7 @@ def config_from_dict(data: dict[str, Any], root: Path) -> Config:
 
     sections: dict[str, Any] = {}
     for name, cls in (("output", OutputConfig), ("glossary", GlossaryConfig), ("tags", TagConfig),
-                      ("validate", ValidateConfig), ("translate", TranslateConfig),
+                      ("validate", ValidateConfig), ("fit", FitConfig), ("translate", TranslateConfig),
                       ("proofread", ProofreadConfig), ("prompt", PromptConfig)):
         sections[name] = _section(cls, data.pop(name, None), name)
     providers = data.pop("providers", None) or {}

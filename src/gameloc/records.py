@@ -93,6 +93,8 @@ class Project:
         multi = len(files) > 1
         skip = re.compile(src.skip_pattern) if src.skip_pattern else None
         scene_pattern = re.compile(src.scene_pattern) if src.scene_pattern else None
+        replace = {code: [(re.compile(pattern), repl) for pattern, repl in lang.replace]
+                   for code, lang in src.langs.items() if lang.replace}
         for path in files:
             rel = self._relpath(path)
             fmt = detect_format(path, src.format)
@@ -110,6 +112,9 @@ class Project:
                 texts: dict[str, str] = {}
                 for code, lang in src.langs.items():
                     value = side[code].get(local_id) if lang.path else get_path(row, lang.field)
+                    if isinstance(value, str):
+                        for pattern, repl in replace.get(code, ()):
+                            value = pattern.sub(repl, value)
                     if isinstance(value, str) and value.strip():
                         texts[code] = value
                 record = Record(id=f"{rel}::{local_id}" if multi else local_id, texts=texts,

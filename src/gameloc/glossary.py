@@ -38,6 +38,8 @@ class Term:
     target: str
     aliases: list[str] = field(default_factory=list)
     gender: str = ""
+    speech: str = ""
+    """Grammatical gender the character uses about themselves when it differs from ``gender``."""
     note: str = ""
     key: str = ""
     character: bool = False
@@ -56,8 +58,15 @@ class Term:
             return True
         return any(pattern.search(folded) for pattern in self._patterns)
 
+    @property
+    def gender_label(self) -> str:
+        """``male``, or ``male; speaks as female`` for a character who talks about themselves differently."""
+        if self.speech and self.speech != self.gender:
+            return f"{self.gender or '?'}; speaks as {self.speech}"
+        return self.gender
+
     def line(self) -> str:
-        gender = f" [{self.gender}]" if self.gender else ""
+        gender = f" [{self.gender_label}]" if self.gender_label else ""
         if self.character:
             return f"- {self.source} → {self.target}{gender}" + (f": {self.note}" if self.note else "")
         return f"- {self.source} → {self.target}{gender}" + (f" ({self.note})" if self.note else "")
@@ -130,14 +139,15 @@ class Glossary:
                             aliases += [part.strip() for part in source.split(" / ")]
                         notes = [n for n in (_first(entry, [k]) for k in note_keys) if n][:2]
                         gender = normalize_gender(_first(entry, ["gender", "sex"]))
+                        speech = normalize_gender(_first(entry, ["speech_gender", "speaks_as"]))
                         forbidden = [str(v) for v in entry.get("forbidden") or []]
                         forbidden += [str(rule["variant"]) for rule in entry.get("consistency_rules") or []
                                       if isinstance(rule, dict) and rule.get("variant")]
                         terms.append(Term(
                             source=source, target=translation, aliases=list(dict.fromkeys(aliases)),
-                            gender=gender, note="; ".join(notes)[:200],
+                            gender=gender, speech=speech, note="; ".join(notes)[:200],
                             key=str(entry.get("key") or entry.get("id") or source),
-                            character=character or bool(gender), forbidden=forbidden))
+                            character=character or bool(gender or speech), forbidden=forbidden))
         return cls(terms, cfg.glossary.max_terms, cfg.glossary.max_characters)
 
     def find_character(self, name: str) -> Term | None:
@@ -147,7 +157,7 @@ class Glossary:
         term = self.find_character(name)
         if term is None:
             return name
-        return f"{term.target} [{term.gender}]" if term.gender else term.target
+        return f"{term.target} [{term.gender_label}]" if term.gender_label else term.target
 
     def relevant(self, texts: Iterable[str], speakers: Iterable[str] = ()) -> tuple[list[Term], list[Term]]:
         """Characters and terms that appear in the given texts (speakers first)."""

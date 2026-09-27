@@ -17,11 +17,11 @@ from typing import Any
 from . import __version__
 from .config import Config, load_config
 from .glossary import Glossary
-from .proofread import STAGES, Proofreader
+from .proofread import ALL_STAGES, RESOLVE, Proofreader
 from .providers import create_provider
-from .records import Project
+from .records import Project, Record
 from .store import Store
-from .text import TagMasker, Validator
+from .text import TagMasker, make_validator
 from .translate import Translator
 from .util import read_json, read_text, write_json, write_text_atomic
 
@@ -104,14 +104,23 @@ def _status(cfg: Config) -> dict[str, Any]:
             "error_log_lines": errors, "pending_top_scenes": dict(pending_by_scene.most_common(10))}
 
 
-def audit(cfg: Config, requeue: bool = False) -> dict[str, Any]:
-    """Re-validate every stored translation and look for forbidden glossary variants."""
+def _term_stems(target: str) -> list[re.Pattern[str]]:
+    """Word starts of a glossary translation, short enough to match inflected forms ("Білдер" -> "білд")."""
+    words = re.findall(r"\w+", target.casefold())
+    return [re.compile(rf"(?<!\w){re.escape(w if len(w) <= 3 else w[: max(3, len(w) - 2)])}") for w in words]
+
+
+def audit(cfg: Config, requeue: bool = False, terms: bool = False) -> dict[str, Any]:
+    """Re-validate every stored translation and look for forbidden glossary variants
+    (``terms``: also for glossary terms of the source whose translation is missing)."""
     project, store = Project(cfg), Store(cfg.work_dir)
     masker = TagMasker.from_config(cfg.tags)
-    validator = Validator(cfg, masker)
+    validator = make_validator(cfg, masker)
+    glossary = Glossary.load(cfg)
     # a variant matches at the start of a word, so inflected forms count but "Ех" does not hit "брехуне"
     forbidden = [(term, variant, re.compile(rf"(?<!\w){re.escape(variant.casefold())}"))
-                 for term in Glossary.load(cfg).terms for variant in term.forbidden]
+                 for term in glossary.terms for variant in term.forbidden]
+    stems: dict[str, list[re.Pattern[str]]] = {}
     issues: list[dict[str, Any]] = []
     for record in project.records:
         text = store.translation(record)
@@ -121,6 +130,12 @@ def audit(cfg: Config, requeue: bool = False) -> dict[str, Any]:
         folded = text.casefold()
         problems += [f"'{variant}' should be '{term.target}'" for term, variant, pattern in forbidden
                      if pattern.search(folded)]
+        if terms:
+            characters, found = glossary.relevant(record.texts.values())
+            for term in characters + found:
+                patterns = stems.setdefault(term.target, _term_stems(term.target))
+                if not all(pattern.search(folded) for pattern in patterns):
+                    problems.append(f"glossary: '{term.source}' should be '{term.target}'")
         if problems:
             issues.append({"id": record.id, "scene": record.scene, "source": record.source,
                            "translation": text, "problems": problems})
@@ -129,6 +144,34 @@ def audit(cfg: Config, requeue: bool = False) -> dict[str, Any]:
     path = cfg.work_dir / "audit.json"
     write_json(path, issues)
     return {"issues": len(issues), "requeued": len(issues) if requeue else 0, "report": str(path)}
+
+
+def _row(record: Record, store: Store) -> dict[str, Any]:
+    return {"id": record.id, "scene": record.scene, "speaker": record.speaker, **record.texts,
+            "translation": store.translation(record), "status": store.status(record)}
+
+
+def show(cfg: Config, record_id: str, context: int = 3) -> list[dict[str, Any]]:
+    """A record with its neighbours in source order; the record itself is marked with ``"this": true``."""
+    project, store = Project(cfg), Store(cfg.work_dir)
+    index = next((i for i, r in enumerate(project.records) if r.id == record_id), None)
+    if index is None:
+        raise ValueError(f"unknown record id {record_id!r}")
+    return [{**_row(project.records[i], store), **({"this": True} if i == index else {})}
+            for i in range(max(0, index - context), min(len(project.records), index + context + 1))]
+
+
+def grep(cfg: Config, pattern: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Records whose source texts or translation match a regex (case-insensitive)."""
+    project, store = Project(cfg), Store(cfg.work_dir)
+    regex = re.compile(pattern, re.IGNORECASE)
+    found = []
+    for record in project.records:
+        if any(regex.search(text) for text in [*record.texts.values(), store.translation(record) or ""]):
+            found.append(_row(record, store))
+            if len(found) >= limit:
+                break
+    return found
 
 
 def sheet_export(cfg: Config, path: Path, scenes: list[str] | None = None) -> int:
@@ -152,7 +195,7 @@ def sheet_export(cfg: Config, path: Path, scenes: list[str] | None = None) -> in
 
 def sheet_import(cfg: Config, path: Path) -> dict[str, int]:
     project, store = Project(cfg), Store(cfg.work_dir)
-    validator = Validator(cfg, TagMasker.from_config(cfg.tags))
+    validator = make_validator(cfg, TagMasker.from_config(cfg.tags))
     changed = rejected = 0
     for row in csv.DictReader(io.StringIO(read_text(path)[0], newline="")):
         record = project.by_id.get(row.get("id", ""))
@@ -218,6 +261,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = commands.add_parser("audit", help="re-validate stored translations")
     p.add_argument("--requeue", action="store_true", help="mark failing lines for re-translation")
+    p.add_argument("--terms", action="store_true", help="also report glossary terms missing from translations")
+
+    p = commands.add_parser("show", help="a record with its neighbours, sources and translations")
+    p.add_argument("id")
+    p.add_argument("--context", type=int, default=3, help="neighbouring records on each side")
+    p = commands.add_parser("grep", help="search sources and translations (regex, case-insensitive)")
+    p.add_argument("pattern")
+    p.add_argument("--limit", type=int, default=50)
 
     commands.add_parser("export", help="write translations into copies of the game files")
 
@@ -235,18 +286,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-proofread", action="store_true")
     p = proof.add_parser("run", help="answer packets with the provider (all stages by default)")
     p.add_argument("run", type=Path, nargs="?")
-    p.add_argument("--stage", choices=STAGES)
+    p.add_argument("--stage", choices=ALL_STAGES)
     p.add_argument("--limit", type=int, help="at most N packets per stage")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--workers", type=int)
+    p = proof.add_parser("resolve", help="settle the lines of review.json with the provider, then export again")
+    p.add_argument("run", type=Path, nargs="?")
+    p.add_argument("--limit", type=int, help="at most N packets")
     p.add_argument("--provider")
     p.add_argument("--model")
     p.add_argument("--workers", type=int)
     for name, help_text in (("advance", "create packets of the next stage"),
                             ("next", "write the next packet prompt for manual review")):
         p = proof.add_parser(name, help=help_text)
-        p.add_argument("stage", choices=STAGES[1:] if name == "advance" else STAGES)
+        p.add_argument("stage", choices=ALL_STAGES[1:] if name == "advance" else ALL_STAGES)
         p.add_argument("run", type=Path, nargs="?")
     p = proof.add_parser("submit", help="submit a manual answer file")
-    p.add_argument("stage", choices=STAGES)
+    p.add_argument("stage", choices=ALL_STAGES)
     p.add_argument("batch")
     p.add_argument("response", type=Path)
     p.add_argument("run", type=Path, nargs="?")
@@ -278,7 +335,11 @@ def run(args: argparse.Namespace) -> Any:
     if args.command == "test":
         return test_provider(cfg, args.provider, args.model)
     if args.command == "audit":
-        return audit(cfg, args.requeue)
+        return audit(cfg, args.requeue, args.terms)
+    if args.command == "show":
+        return show(cfg, args.id, args.context)
+    if args.command == "grep":
+        return grep(cfg, args.pattern, args.limit)
     if args.command == "export":
         return [str(path) for path in Project(cfg).export(Store(cfg.work_dir))]
     if args.command == "sheet-export":
@@ -291,10 +352,14 @@ def run(args: argparse.Namespace) -> Any:
         run_dir = args.run or cfg.work_dir / "proofread" / datetime.now().strftime("%Y%m%d-%H%M%S")
         return Proofreader(cfg, run_dir).prepare(scenes=args.scene, include_proofread=args.include_proofread)
     run_dir = args.run or _latest_run(cfg)
-    if args.action == "run":
+    if args.action in ("run", "resolve"):
         if args.workers:
             cfg.proofread.workers = args.workers
-        return Proofreader(cfg, run_dir, provider=args.provider, model=args.model).run(args.stage, limit=args.limit)
+        proofreader = Proofreader(cfg, run_dir, provider=args.provider, model=args.model)
+        if args.action == "run":
+            return proofreader.run(args.stage, limit=args.limit)
+        result = proofreader.run(RESOLVE, limit=args.limit)
+        return result if result[RESOLVE]["pending"] else {**result, "export": proofreader.export()}
     proofreader = Proofreader(cfg, run_dir)
     if args.action == "advance":
         return proofreader.advance(args.stage)
