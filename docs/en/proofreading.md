@@ -53,7 +53,8 @@ gameloc_work/proofread/20260924-101500/
 - A run can be interrupted at any time: `run` only answers packets that have no answer yet.
 - Packets follow scenes: a scene that fits stays whole in one packet (small scenes share one);
   a larger scene is split into consecutive packets that carry the scene's preceding lines as
-  `earlier` (`translate.context_lines`) and are answered in order by one worker.
+  `earlier` (`proofread.context_lines`) and are answered in order by one worker. `earlier` is built
+  when the packet is sent, so it shows the previous part as the edit stage already corrected it.
 
 ## Manual mode (any chat UI)
 

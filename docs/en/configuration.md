@@ -173,7 +173,8 @@ goes back to the model with the reason ("3 lines, the box shows 2"), like any ot
 
 ## `[proofread]`
 
-`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `batch_chars` (0: characters of record data per packet,
+`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `context_lines` (12: preceding lines a packet that continues a scene receives),
+`batch_chars` (0: characters of record data per packet,
 e.g. `8000` for whole scenes of about that size, instead of subtracting the prompt from `max_chars`).
 See [proofreading](proofreading.md).
 

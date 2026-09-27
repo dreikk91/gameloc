@@ -173,7 +173,8 @@ max_lines = 2
 
 ## `[proofread]`
 
-`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `batch_chars` (0: символів даних записів на пакет,
+`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `context_lines` (12: скільки попередніх рядків отримує пакет-продовження сцени),
+`batch_chars` (0: символів даних записів на пакет,
 напр. `8000` для цілих сцен приблизно такого розміру, замість віднімання промпту від `max_chars`).
 Див. [редактура](proofreading.md).
 

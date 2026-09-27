@@ -299,19 +299,39 @@ def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
     data = {"game": "Test", "target_lang": "uk",
             "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
                        "langs": {"en": "en"}},
-            "output": {"field": "uk"}, "translate": {"context_lines": 2}, "proofread": {"max_chars": 8000}}
+            "output": {"field": "uk"}, "proofread": {"max_chars": 8000, "context_lines": 2}}
     cfg = config_from_dict(data, tmp_path)
     store = Store(cfg.work_dir)
     for record in Project(cfg).records:
-        store.put(record, "Переклад " + record.id, "translated")
-    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1",
-                              provider_factory=lambda: FakeProvider(lambda s, u: "{}"))
+        store.put(record, "Переклад " + record.id.lstrip("ab"), "translated")
+    edit_messages: list[dict[str, object]] = []
+
+    def reviewer(system: str, user: str) -> str:
+        packet = json.loads(user.removeprefix("DATA="))
+        stage = packet["stage"]
+        if stage == "edit":
+            edit_messages.append(packet)
+        records = []
+        for view in packet["records"]:
+            decision = {"meaning": "ok", "edit": "change", "verify": "accept"}[stage]
+            item = {"id": view["id"], "decision": decision, "note": "Добре."}
+            if stage == "edit":
+                item["translation"] = "Виправлено " + view["translation"]
+            records.append(item)
+        return json.dumps({"batch_id": packet["batch_id"], "stage": stage, "records": records}, ensure_ascii=False)
+
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1", provider_factory=lambda: FakeProvider(reviewer))
     proofreader.prepare()
     packets = list(proofreader.packets("meaning").values())
     scenes = [{proofreader.snapshot["records"][rid]["scene"] for rid in p["ids"]} for p in packets]
     assert "ev1" in scenes[0]
     assert len(packets) > 2 and sum("ev1" in s for s in scenes) == 1  # the small scene is never split
     split = [p for p, s in zip(packets, scenes, strict=True) if s == {"ev2"}][1:]
-    assert split and all(len(p["earlier"]) == 2 and p["earlier"][0]["translation"].startswith("Переклад b")
-                         for p in split)
-    assert [len(c) for c in proofreader.chains(packets)][-1] == len([s for s in scenes if "ev2" in s])
+    assert split and all(len(p["earlier_ids"]) == 2 for p in split)
+    assert max(len(c) for c in proofreader.chains(packets)) == len([s for s in scenes if "ev2" in s])
+
+    proofreader.run()
+    continued = [m for m in edit_messages if m.get("earlier")]
+    # a part that continues ev2 sees the previous part's corrections, not the drafts
+    assert continued and all(line["translation"].startswith("Виправлено ")
+                             for m in continued for line in m["earlier"])  # type: ignore[union-attr]

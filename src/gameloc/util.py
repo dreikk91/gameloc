@@ -174,11 +174,14 @@ def _repair_array(text: str) -> list[Any] | None:
 
 
 def pack_scenes(items: list[T], scene: Callable[[T], str], cost: Callable[[T], int], budget: int, *,
-                max_items: int = 0, merge: bool = True, merge_max: int = 0) -> list[list[T]]:
+                max_items: int = 0, merge: bool = True, merge_max: int = 0,
+                continued: Callable[[T], int] | None = None) -> list[list[T]]:
     """Group consecutive items of one scene and pack whole scenes into batches.
 
     A scene is split only when it alone exceeds ``budget`` or ``max_items``; scenes longer than
     ``merge_max`` (0 = no limit) or all scenes when ``merge`` is off never share a batch.
+    ``continued(first item)`` gives the budget of the parts after the first one of a split
+    scene (they carry earlier lines as context); by default they get ``budget``.
     """
     scenes: list[list[T]] = []
     for item in items:
@@ -203,10 +206,12 @@ def pack_scenes(items: list[T], scene: Callable[[T], str], cost: Callable[[T], i
             continue
         chunk: list[T] = []
         chunk_size = 0
+        chunk_budget = budget
         for item, item_cost in zip(group, costs, strict=True):
-            if chunk and (len(chunk) >= limit or chunk_size + item_cost > budget):
+            if chunk and (len(chunk) >= limit or chunk_size + item_cost > chunk_budget):
                 result.append(chunk)
                 chunk, chunk_size = [], 0
+                chunk_budget = continued(group[0]) if continued else budget
             chunk.append(item)
             chunk_size += item_cost
         result.append(chunk)

@@ -137,16 +137,17 @@ class Proofreader:
             "glossary": [term.line()[2:] for term in terms],
             "ids": [record_id for record_id, _ in items],
         }
-        earlier = self._earlier(packet["ids"])
+        earlier = self._earlier_ids(packet["ids"])
         if earlier:
-            packet["earlier"] = earlier
+            packet["earlier_ids"] = earlier
         packet["batch_id"] = sha256(dumps(packet))[:16]
         packet["prompt_sha256"] = sha256(self.render(packet))
         return packet
 
     @staticmethod
     def data(packet: dict[str, Any]) -> str:
-        return "DATA=" + dumps({k: v for k, v in packet.items() if k not in ("ids", "prompt_sha256")})
+        """The packet's fixed part (its hash binds the answers)."""
+        return "DATA=" + dumps({k: v for k, v in packet.items() if k not in ("ids", "prompt_sha256", "earlier_ids")})
 
     def _system(self, stage: str) -> str:
         prompt: str | None = self.snapshot["prompts"].get(stage)
@@ -155,18 +156,46 @@ class Proofreader:
     def render(self, packet: dict[str, Any]) -> str:
         return self._system(packet["stage"]) + "\n\n" + self.data(packet)
 
+    def message(self, packet: dict[str, Any]) -> str:
+        """What is sent: the fixed part plus ``earlier``, built at send time so a
+        packet that continues a scene sees the previous part's corrections."""
+        body = {k: v for k, v in packet.items() if k not in ("ids", "prompt_sha256", "earlier_ids")}
+        if packet.get("earlier_ids"):
+            body["earlier"] = self._earlier_lines(packet["stage"], packet["earlier_ids"])
+        return "DATA=" + dumps(body)
+
     def _pack(self, stage: str, items: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
-        budget = self.snapshot.get("batch_chars") or max(
-            1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE
-            - self.cfg.translate.context_lines * _EARLIER_LINE_COST)
+        """Packets that keep each scene whole when it fits; small scenes share a
+        packet, a scene too large for one is split into consecutive packets.  A
+        part that continues a dialogue scene carries "earlier", so it gets less room."""
+        full = self.snapshot.get("batch_chars") or max(
+            1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE)
+        reserve = self.cfg.proofread.context_lines * _EARLIER_LINE_COST
+        records = self.snapshot["records"]
+
+        def scene(item: tuple[str, dict[str, Any]]) -> str:
+            return str(records[item[0]]["scene"])
+
+        def continued(item: tuple[str, dict[str, Any]]) -> int:
+            return max(1000, full - reserve) if scene(item) in self._dialogue_scenes() else full
+
         opts = self.cfg.translate
-        groups = pack_scenes(items, lambda item: str(item[1].get("scene", "")), lambda item: len(dumps(item[1])) + 8,
-                             budget, merge=opts.merge_scenes, merge_max=opts.merge_max_lines)
+        groups = pack_scenes(items, scene, lambda item: len(dumps(item[1])) + 8, full,
+                             max_items=self.cfg.proofread.max_records, merge=opts.merge_scenes,
+                             merge_max=opts.merge_max_lines, continued=continued)
         return [self._packet(stage, group) for group in groups]
 
-    def _earlier(self, record_ids: list[str]) -> list[dict[str, Any]]:
-        """Lines just before a packet that starts mid-scene (context only)."""
-        count = self.cfg.translate.context_lines
+    def _dialogue_scenes(self) -> set[str]:
+        """Scenes with speakers: the ones read as a conversation."""
+        records = self.snapshot["records"]
+        if getattr(self, "_dialogue_of", None) is not records:
+            self._dialogue_of = records
+            self._dialogue = {item["scene"] for item in records.values() if item["scene"] and item["speaker"]}
+        return self._dialogue
+
+    def _earlier_ids(self, record_ids: list[str]) -> list[str]:
+        """Ids of the lines just before a packet that starts mid-scene."""
+        count = self.cfg.proofread.context_lines
         if count <= 0:
             return []
         records = self.snapshot["records"]
@@ -175,7 +204,7 @@ class Proofreader:
             self._position = {record_id: index for index, record_id in enumerate(self._order)}
         order, position = self._order, self._position
         inside = set(record_ids)
-        result: list[dict[str, Any]] = []
+        result: list[str] = []
         seen: set[str] = set()
         for record_id in record_ids:
             scene = records[record_id]["scene"]
@@ -183,16 +212,39 @@ class Proofreader:
                 continue
             seen.add(scene)
             start = position[record_id]
-            before = [rid for rid in order[max(0, start - count):start]
-                      if records[rid]["scene"] == scene and rid not in inside]
-            for rid in before:
-                record = self.record(rid)
-                line: dict[str, Any] = {"scene": scene}
-                if record.speaker:
-                    line["speaker"] = self.glossary.speaker_label(record.speaker)
-                line[next(iter(record.texts))] = self.masker.strip(record.source)
-                line["translation"] = self.masker.strip(records[rid]["draft"])
-                result.append(line)
+            result += [rid for rid in order[max(0, start - count):start]
+                       if records[rid]["scene"] == scene and rid not in inside]
+        return result
+
+    def _latest(self, record_id: str) -> str:
+        """The line as it stands now: the edit stage's correction once that
+        stage answered it, otherwise the draft."""
+        draft: str = self.snapshot["records"][record_id]["draft"]
+        if not getattr(self, "_edit_batch", None):  # edit packets appear once that stage starts
+            self._edit_batch = {rid: batch for batch, packet in self.packets("edit").items() for rid in packet["ids"]}
+            self._edit_answers: dict[str, dict[str, Any]] = {}
+        batch = self._edit_batch.get(record_id)
+        if batch is None:
+            return draft
+        if batch not in self._edit_answers:
+            path = self._response_path("edit", batch)
+            if not path.exists():
+                return draft
+            self._edit_answers[batch] = {item["id"]: item for item in read_json(path)["records"]}
+        answer = self._edit_answers[batch].get(record_id, {})
+        return str(answer.get("translation") or draft)
+
+    def _earlier_lines(self, stage: str, record_ids: list[str]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for rid in record_ids:
+            record = self.record(rid)
+            line: dict[str, Any] = {"scene": record.scene}
+            if record.speaker:
+                line["speaker"] = self.glossary.speaker_label(record.speaker)
+            line[next(iter(record.texts))] = self.masker.strip(record.source)
+            text = self.snapshot["records"][rid]["draft"] if stage == "meaning" else self._latest(rid)
+            line["translation"] = self.masker.strip(text)
+            result.append(line)
         return result
 
     # -- files -------------------------------------------------------------
@@ -374,7 +426,7 @@ class Proofreader:
             return None
         packet = pending[0]
         path = self.run_dir / stage / f"next-{packet['batch_id']}.txt"
-        write_text_atomic(path, self.render(packet))
+        write_text_atomic(path, self.snapshot["prompts"][stage] + "\n\n" + self.message(packet))
         return packet["batch_id"], path
 
     def _provider(self) -> Provider:
@@ -388,15 +440,16 @@ class Proofreader:
             return False
         provider = self._provider()
         system = self._system(stage)
+        message = self.message(packet)  # after the previous part of the scene was answered
         error = reply = ""
         for attempt in range(1, self.cfg.proofread.attempts + 1):
             prompt = system if not error else (
                 f"{system}\n\nYOUR PREVIOUS ANSWER WAS REJECTED: {error}. Fix only that problem.")
             try:
-                completion = provider.complete(prompt, self.data(packet))
+                completion = provider.complete(prompt, message)
                 reply = completion.text
                 self.store.add_usage(provider.type, completion.model, completion.usage,
-                                     len(prompt) + len(self.data(packet)))
+                                     len(prompt) + len(message))
                 self.submit(stage, packet["batch_id"], completion.text, f"{provider.type}:{completion.model}",
                             verify_batch=False)
                 return True
