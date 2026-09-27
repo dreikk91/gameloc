@@ -40,6 +40,7 @@ DECISIONS = {
 }
 _CHANGED = "draft or source changed since the snapshot"
 _HEADER_RESERVE = 2500
+_EARLIER_LINE_COST = 250  # rough size of one "earlier" context line
 
 
 class Proofreader:
@@ -136,6 +137,9 @@ class Proofreader:
             "glossary": [term.line()[2:] for term in terms],
             "ids": [record_id for record_id, _ in items],
         }
+        earlier = self._earlier(packet["ids"])
+        if earlier:
+            packet["earlier"] = earlier
         packet["batch_id"] = sha256(dumps(packet))[:16]
         packet["prompt_sha256"] = sha256(self.render(packet))
         return packet
@@ -153,11 +157,43 @@ class Proofreader:
 
     def _pack(self, stage: str, items: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
         budget = self.snapshot.get("batch_chars") or max(
-            1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE)
+            1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE
+            - self.cfg.translate.context_lines * _EARLIER_LINE_COST)
         opts = self.cfg.translate
         groups = pack_scenes(items, lambda item: str(item[1].get("scene", "")), lambda item: len(dumps(item[1])) + 8,
                              budget, merge=opts.merge_scenes, merge_max=opts.merge_max_lines)
         return [self._packet(stage, group) for group in groups]
+
+    def _earlier(self, record_ids: list[str]) -> list[dict[str, Any]]:
+        """Lines just before a packet that starts mid-scene (context only)."""
+        count = self.cfg.translate.context_lines
+        if count <= 0:
+            return []
+        records = self.snapshot["records"]
+        if getattr(self, "_order_of", None) is not records:
+            self._order_of, self._order = records, list(records)
+            self._position = {record_id: index for index, record_id in enumerate(self._order)}
+        order, position = self._order, self._position
+        inside = set(record_ids)
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for record_id in record_ids:
+            scene = records[record_id]["scene"]
+            if not scene or scene in seen:
+                continue
+            seen.add(scene)
+            start = position[record_id]
+            before = [rid for rid in order[max(0, start - count):start]
+                      if records[rid]["scene"] == scene and rid not in inside]
+            for rid in before:
+                record = self.record(rid)
+                line: dict[str, Any] = {"scene": scene}
+                if record.speaker:
+                    line["speaker"] = self.glossary.speaker_label(record.speaker)
+                line[next(iter(record.texts))] = self.masker.strip(record.source)
+                line["translation"] = self.masker.strip(records[rid]["draft"])
+                result.append(line)
+        return result
 
     # -- files -------------------------------------------------------------
 
@@ -377,6 +413,20 @@ class Proofreader:
         log.warning("%s %s failed: %s", stage, packet["batch_id"], error)
         return False
 
+    def chains(self, packets: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        """Consecutive packets of one scene (a scene too large for one packet)
+        are answered in order by one worker; the rest run in parallel."""
+        chains: list[list[dict[str, Any]]] = []
+        previous: set[str] = set()
+        for packet in packets:
+            scenes = {self.snapshot["records"][rid]["scene"] for rid in packet["ids"]} - {""}
+            if chains and scenes & previous:
+                chains[-1].append(packet)
+            else:
+                chains.append([packet])
+            previous = scenes
+        return chains
+
     def run(self, stage: str | None = None, *, limit: int | None = None) -> dict[str, Any]:
         """Answer pending packets; without ``stage`` walk through all stages, advancing automatically."""
         report: dict[str, Any] = {}
@@ -386,9 +436,23 @@ class Proofreader:
                     raise ValueError("run prepare first")
                 self.advance(current)
             pending = self.pending_packets(current)[: limit or None]
-            workers = max(1, min(self.cfg.proofread.workers, len(pending) or 1))
+            chains = self.chains(pending)
+            workers = max(1, min(self.cfg.proofread.workers, len(chains) or 1))
+            numbered = {id(packet): index for index, packet in enumerate(pending, 1)}
+
+            def run_chain(chain: list[dict[str, Any]], stage: str = current, numbered: dict[int, int] = numbered,
+                          total: int = len(pending)) -> int:
+                answered = 0
+                for packet in chain:
+                    ok = self._work(stage, packet)
+                    answered += ok
+                    scenes = ", ".join(dict.fromkeys(self.snapshot["records"][rid]["scene"] for rid in packet["ids"]))
+                    log.info("[%d/%d] %s %s: %s", numbered[id(packet)], total, stage, scenes[:60],
+                             "answered" if ok else "failed")
+                return answered
+
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="proofread") as pool:
-                done = sum(pool.map(self._work, [current] * len(pending), pending))
+                done = sum(pool.map(run_chain, chains))
             left = len(self.pending_packets(current))
             report[current] = {"answered": done, "pending": left}
             log.info("%s: %d packets answered, %d pending", current, done, left)

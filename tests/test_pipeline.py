@@ -289,3 +289,29 @@ def test_dialogue_scene_batches_run_in_order(tmp_path: Path) -> None:
     translator.run()
     later = [u for u in seen if '"en":"Line number 4."' in u][0]
     assert '"uk":"Рядок 3"' in later  # the previous batch was already translated
+
+
+def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
+    long = "A fairly long line of dialogue that takes some room in a packet."
+    rows = [{"id": f"a{i}", "en": f"{long} {i}", "who": "Rufus", "scene": "ev1"} for i in range(3)]
+    rows += [{"id": f"b{i}", "en": f"{long} {i}", "who": "Alicia", "scene": "ev2"} for i in range(40)]
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    data = {"game": "Test", "target_lang": "uk",
+            "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
+                       "langs": {"en": "en"}},
+            "output": {"field": "uk"}, "translate": {"context_lines": 2}, "proofread": {"max_chars": 8000}}
+    cfg = config_from_dict(data, tmp_path)
+    store = Store(cfg.work_dir)
+    for record in Project(cfg).records:
+        store.put(record, "Переклад " + record.id, "translated")
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1",
+                              provider_factory=lambda: FakeProvider(lambda s, u: "{}"))
+    proofreader.prepare()
+    packets = list(proofreader.packets("meaning").values())
+    scenes = [{proofreader.snapshot["records"][rid]["scene"] for rid in p["ids"]} for p in packets]
+    assert "ev1" in scenes[0]
+    assert len(packets) > 2 and sum("ev1" in s for s in scenes) == 1  # the small scene is never split
+    split = [p for p, s in zip(packets, scenes, strict=True) if s == {"ev2"}][1:]
+    assert split and all(len(p["earlier"]) == 2 and p["earlier"][0]["translation"].startswith("Переклад b")
+                         for p in split)
+    assert [len(c) for c in proofreader.chains(packets)][-1] == len([s for s in scenes if "ev2" in s])

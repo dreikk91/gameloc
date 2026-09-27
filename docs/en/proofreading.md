@@ -51,6 +51,9 @@ gameloc_work/proofread/20260924-101500/
 - Answers are bound to the prompt hash: if a packet changed, an old answer is never silently reused.
 - `export` skips lines whose draft or source changed after the snapshot — they go to `review.json`.
 - A run can be interrupted at any time: `run` only answers packets that have no answer yet.
+- Packets follow scenes: a scene that fits stays whole in one packet (small scenes share one);
+  a larger scene is split into consecutive packets that carry the scene's preceding lines as
+  `earlier` (`translate.context_lines`) and are answered in order by one worker.
 
 ## Manual mode (any chat UI)
 
