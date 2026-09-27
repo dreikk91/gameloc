@@ -143,6 +143,33 @@ def test_scene_packing(tmp_path: Path) -> None:
     ]
     prompt = translator.build_prompt(batches[0])[0]
     assert "SCENE: small0" in prompt and "SCENE: small1" in prompt and '"scene"' not in prompt
+def test_scene_cast_and_earlier_lines(tmp_path: Path) -> None:
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": [
+        {"id": "1", "en": "Rufus, wait!", "who": "Alicia", "scene": "ev1"},
+        {"id": "2", "en": "What now?", "who": "Rufus", "scene": "ev1"},
+        {"id": "3", "en": "Where have you been?", "who": "Rufus", "scene": "ev1"},
+        {"id": "4", "en": "Potion", "scene": "menu"},
+    ]}), encoding="utf-8")
+    (tmp_path / "chars.json").write_text(json.dumps([
+        {"en": "Alicia", "uk": "Алісія", "gender": "female"},
+        {"en": "Rufus", "uk": "Руфус", "gender": "male"}]), encoding="utf-8")
+    data = {"game": "Test", "target_lang": "uk",
+            "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
+                       "langs": {"en": "en"}},
+            "output": {"field": "uk"}, "glossary": {"characters": "chars.json"},
+            "translate": {"context_lines": 2}}
+    translator = Translator(config_from_dict(data, tmp_path),
+                            provider_factory=lambda: FakeProvider(lambda s, u: "[]"))
+    translator.store.put(translator.project.by_id["1"], "Руфусе, стривай!", "translated")
+    prompt, _ = translator.build_prompt([translator.project.by_id["3"]])
+    # Alicia only speaks outside the batch, yet she is in the cast and in the earlier lines
+    assert "- Alicia → Алісія [female]" in prompt and "- Rufus → Руфус [male]" in prompt
+    earlier = prompt.split("EARLIER LINES")[1].split("ITEMS:")[0]
+    assert '"speaker":"Алісія [female]","en":"Rufus, wait!","uk":"Руфусе, стривай!"' in earlier
+    assert '"What now?"' in earlier and "Where have you been" not in earlier
+    # scenes without speakers get no cast from the rest of the scene
+    menu, _ = translator.build_prompt([translator.project.by_id["4"]])
+    assert "CHARACTERS" not in menu and "EARLIER LINES" not in menu
 
 
 def test_three_pass_proofread(tmp_path: Path) -> None:

@@ -117,8 +117,15 @@ class Proofreader:
 
     def _packet(self, stage: str, items: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
         records = [self.record(record_id) for record_id, _ in items]
+        scene_rows: list[Record] = []
+        if self.cfg.translate.scene_cast:
+            for scene in dict.fromkeys(r.scene for r in records if r.scene):
+                rows = self.project.by_scene.get(scene, [])
+                if any(row.speaker for row in rows):
+                    scene_rows += rows
         characters, terms = self.glossary.relevant(
-            (text for r in records for text in r.texts.values()), (r.speaker for r in records))
+            (text for r in records for text in r.texts.values()), (r.speaker for r in records),
+            (text for r in scene_rows for text in r.texts.values()), (r.speaker for r in scene_rows))
         packet: dict[str, Any] = {
             "stage": stage,
             "snapshot_id": self.snapshot["snapshot_id"],

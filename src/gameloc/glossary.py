@@ -159,19 +159,37 @@ class Glossary:
             return name
         return f"{term.target} [{term.gender_label}]" if term.gender_label else term.target
 
-    def relevant(self, texts: Iterable[str], speakers: Iterable[str] = ()) -> tuple[list[Term], list[Term]]:
-        """Characters and terms that appear in the given texts (speakers first)."""
+    def relevant(self, texts: Iterable[str], speakers: Iterable[str] = (),
+                 scene_texts: Iterable[str] = (), scene_speakers: Iterable[str] = ()
+                 ) -> tuple[list[Term], list[Term]]:
+        """Characters and terms that appear in the given texts (speakers first).
+
+        ``scene_texts``/``scene_speakers`` describe the rest of the scene: its
+        speakers and mentioned characters follow the batch's own, so the model
+        knows who is present even when they do not speak in this batch.
+        Terms come from the batch texts only.
+        """
+        characters: list[Term] = []
+
+        def add_speakers(names: Iterable[str]) -> None:
+            for name in names:
+                term = self.find_character(name)
+                if term and term not in characters:
+                    characters.append(term)
+
+        add_speakers(speakers)
         raw = "\n".join(texts)
         folded = raw.casefold()
-        characters: list[Term] = []
-        for name in speakers:
-            term = self.find_character(name)
-            if term and term not in characters:
-                characters.append(term)
         terms: list[Term] = []
         # ponytail: linear scan of every term per batch; build one alternation regex if glossaries reach ~50k entries
         for term in self.terms:
             if term in characters or not term.matches(raw, folded):
                 continue
             (characters if term.character else terms).append(term)
+        add_speakers(scene_speakers)
+        scene_raw = "\n".join(scene_texts)
+        if scene_raw:
+            scene_folded = scene_raw.casefold()
+            characters += [term for term in self.terms if term.character and term not in characters
+                           and term.matches(scene_raw, scene_folded)]
         return characters[: self.max_characters], terms[: self.max_terms]
