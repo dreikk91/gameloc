@@ -8,9 +8,11 @@ import json
 import os
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 _APPEND_LOCK = threading.Lock()
 
@@ -169,3 +171,45 @@ def _repair_array(text: str) -> list[Any] | None:
         if isinstance(value, list):
             return value
     return None
+
+
+def pack_scenes(items: list[T], scene: Callable[[T], str], cost: Callable[[T], int], budget: int, *,
+                max_items: int = 0, merge: bool = True, merge_max: int = 0) -> list[list[T]]:
+    """Group consecutive items of one scene and pack whole scenes into batches.
+
+    A scene is split only when it alone exceeds ``budget`` or ``max_items``; scenes longer than
+    ``merge_max`` (0 = no limit) or all scenes when ``merge`` is off never share a batch.
+    """
+    scenes: list[list[T]] = []
+    for item in items:
+        if scenes and scene(scenes[-1][-1]) == scene(item):
+            scenes[-1].append(item)
+        else:
+            scenes.append([item])
+    limit = max_items or len(items) or 1
+    result: list[list[T]] = []
+    current: list[T] = []
+    size = 0
+    for group in scenes:
+        costs = [cost(item) for item in group]
+        total = sum(costs) + len(scene(group[0])) + 10  # + scene boundary
+        mergeable = merge and (not merge_max or len(group) <= merge_max)
+        if current and (not mergeable or size + total > budget or len(current) + len(group) > limit):
+            result.append(current)
+            current, size = [], 0
+        if mergeable and total <= budget and len(group) <= limit:
+            current += group
+            size += total
+            continue
+        chunk: list[T] = []
+        chunk_size = 0
+        for item, item_cost in zip(group, costs, strict=True):
+            if chunk and (len(chunk) >= limit or chunk_size + item_cost > budget):
+                result.append(chunk)
+                chunk, chunk_size = [], 0
+            chunk.append(item)
+            chunk_size += item_cost
+        result.append(chunk)
+    if current:
+        result.append(current)
+    return result

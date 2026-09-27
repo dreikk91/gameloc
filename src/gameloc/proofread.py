@@ -24,7 +24,7 @@ from .providers import AuthError, Provider, ProviderError, QuotaExhausted, creat
 from .records import Project, Record
 from .store import Store
 from .text import TagMasker, Validator
-from .util import dumps, extract_json, iter_jsonl, read_json, sha256, write_json, write_text_atomic
+from .util import dumps, extract_json, iter_jsonl, pack_scenes, read_json, sha256, write_json, write_text_atomic
 
 log = logging.getLogger("gameloc")
 
@@ -111,7 +111,9 @@ class Proofreader:
         packet: dict[str, Any] = {
             "stage": stage,
             "snapshot_id": self.snapshot["snapshot_id"],
-            "records": [{"id": str(index), **view} for index, (_, view) in enumerate(items, 1)],
+            "records": [{"id": str(index), **{k: v for k, v in view.items()
+                                              if k != "scene" or index == 1 or items[index - 2][1].get("scene") != v}}
+                        for index, (_, view) in enumerate(items, 1)],
             "characters": [term.line()[2:] for term in characters],
             "glossary": [term.line()[2:] for term in terms],
             "ids": [record_id for record_id, _ in items],
@@ -130,19 +132,10 @@ class Proofreader:
 
     def _pack(self, stage: str, items: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
         budget = max(1000, self.snapshot["max_chars"] - len(self.snapshot["prompts"][stage]) - _HEADER_RESERVE)
-        packets: list[dict[str, Any]] = []
-        current: list[tuple[str, dict[str, Any]]] = []
-        size = 0
-        for item in items:
-            cost = len(dumps(item[1])) + 8
-            if current and size + cost > budget:
-                packets.append(self._packet(stage, current))
-                current, size = [], 0
-            current.append(item)
-            size += cost
-        if current:
-            packets.append(self._packet(stage, current))
-        return packets
+        opts = self.cfg.translate
+        groups = pack_scenes(items, lambda item: str(item[1].get("scene", "")), lambda item: len(dumps(item[1])) + 8,
+                             budget, merge=opts.merge_scenes, merge_max=opts.merge_max_lines)
+        return [self._packet(stage, group) for group in groups]
 
     # -- files -------------------------------------------------------------
 
@@ -237,12 +230,16 @@ class Proofreader:
         log.info("%s: %d packets for %d records", stage, len(packets), len(items))
         return {"stage": stage, "packets": len(packets), "records": len(items)}
 
-    def check(self, packet: dict[str, Any], reply: str) -> list[dict[str, Any]]:
-        """Validate an answer; returns decisions keyed by real record ids."""
+    def check(self, packet: dict[str, Any], reply: str, *, verify_batch: bool = True) -> list[dict[str, Any]]:
+        """Validate an answer; returns decisions keyed by real record ids.
+
+        ``verify_batch`` guards manual submits against pasting another packet's answer; automatic runs
+        skip it because models often garble the echoed hex id while the rest of the answer is fine.
+        """
         stage = packet["stage"]
         data = extract_json(reply)
         if isinstance(data, dict):
-            for key in ("batch_id", "stage"):
+            for key in ("batch_id", "stage") if verify_batch else ("stage",):
                 if data.get(key) not in (None, packet[key]):
                     raise ValueError(f"{key} mismatch: {data.get(key)!r}")
             data = data.get("records")
@@ -269,6 +266,7 @@ class Proofreader:
                 record = self.record(expected[local_id])
                 text = self.masker.unmask(item["translation"].strip(), self._tokens(record),
                                           self.cfg.tags.strict_order)
+                text = self.validator.normalize(text)
                 problems = self.validator.problems(record, text)
                 if problems:
                     raise ValueError(f"{local_id}: {'; '.join(problems)}")
@@ -279,14 +277,15 @@ class Proofreader:
             raise ValueError(f"answer omitted ids {missing}")
         return list(result.values())
 
-    def submit(self, stage: str, batch_id: str, reply: str, reviewer: str = "manual") -> int:
+    def submit(self, stage: str, batch_id: str, reply: str, reviewer: str = "manual", *,
+               verify_batch: bool = True) -> int:
         packet = self.packets(stage).get(batch_id)
         if packet is None:
             raise ValueError(f"unknown batch {batch_id}")
         path = self._response_path(stage, batch_id)
         if path.exists():
             raise ValueError(f"batch {batch_id} already answered")
-        records = self.check(packet, reply)
+        records = self.check(packet, reply, verify_batch=verify_batch)
         write_json(path, {"stage": stage, "batch_id": batch_id, "reviewer": reviewer,
                           "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
                           "prompt_sha256": packet["prompt_sha256"], "response_sha256": sha256(reply),
@@ -323,7 +322,8 @@ class Proofreader:
                 reply = completion.text
                 self.store.add_usage(provider.type, completion.model, completion.usage,
                                      len(prompt) + len(self.data(packet)))
-                self.submit(stage, packet["batch_id"], completion.text, f"{provider.type}:{completion.model}")
+                self.submit(stage, packet["batch_id"], completion.text, f"{provider.type}:{completion.model}",
+                            verify_batch=False)
                 return True
             except (AuthError, QuotaExhausted) as exc:
                 if not self._stop.is_set():
@@ -367,6 +367,9 @@ class Proofreader:
 
     def export(self) -> dict[str, Any]:
         """Store accepted lines as ``proofread``; list everything else in ``review.json``."""
+        unfinished = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
+        if unfinished:
+            raise ValueError(f"proofreading is not finished (stage {unfinished[0]}): run `proofread run` again")
         snapshot_id = self.snapshot["snapshot_id"]
         notes = {stage: self.responses(stage) for stage in STAGES}
         exported = changed = 0

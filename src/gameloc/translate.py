@@ -17,7 +17,7 @@ from .providers import AuthError, ContextOverflow, Provider, ProviderError, Quot
 from .records import Project, Record
 from .store import Store
 from .text import TagMasker, Validator
-from .util import dumps, extract_json
+from .util import dumps, extract_json, pack_scenes
 
 log = logging.getLogger("gameloc")
 
@@ -76,27 +76,19 @@ class Translator:
         return result
 
     def batches(self, records: list[Record]) -> list[list[Record]]:
-        """Split records into prompts, keeping scenes together and in file order."""
+        """Split records into prompts: whole scenes in file order, small scenes packed together.
+
+        A scene is split only when it alone exceeds the budget; a scene longer than
+        ``merge_max_lines`` never shares a batch with another scene.
+        """
         opts = self.cfg.translate
         if opts.group_by_scene:
             order: dict[str, int] = {}
             records = sorted(records, key=lambda r: order.setdefault(r.scene, len(order)))
         budget = max(500, opts.max_chars - len(self.system) - _HEADER_RESERVE)
-        result: list[list[Record]] = []
-        current: list[Record] = []
-        size = 0
-        for record in records:
-            cost = len(dumps(self._item(record, "0", False)[0])) + 1
-            new_scene = bool(current) and record.scene != current[-1].scene
-            if current and (len(current) >= opts.max_records or size + cost > budget
-                            or (new_scene and not opts.merge_scenes)):
-                result.append(current)
-                current, size = [], 0
-            current.append(record)
-            size += cost
-        if current:
-            result.append(current)
-        return result
+        return pack_scenes(records, lambda r: r.scene, lambda r: len(dumps(self._item(r, "0", False)[0])) + 1,
+                           budget, max_items=opts.max_records, merge=opts.merge_scenes,
+                           merge_max=opts.merge_max_lines)
 
     # -- prompt ----------------------------------------------------------
 
@@ -128,7 +120,8 @@ class Translator:
         if len(scenes) == 1:
             lines.append(f"SCENE: {scenes[0]}")
         elif scenes:
-            lines.append(f"SCENES: {', '.join(scenes)} (keep dialogue flow within each scene only)")
+            lines.append(f"{len(scenes)} unrelated scenes, each item list starts with its SCENE line; "
+                         "keep dialogue flow within each scene only.")
         characters, terms = self.glossary.relevant(
             (text for r in records for text in r.texts.values()), (r.speaker for r in records))
         if characters:
@@ -138,7 +131,9 @@ class Translator:
         lines.append("ITEMS:")
         local: dict[str, tuple[Record, list[str]]] = {}
         for index, record in enumerate(records, 1):
-            item, tokens = self._item(record, str(index), len(scenes) > 1)
+            if len(scenes) > 1 and (index == 1 or record.scene != records[index - 2].scene):
+                lines.append(f"SCENE: {record.scene or '-'}")
+            item, tokens = self._item(record, str(index), False)
             lines.append(dumps(item))
             local[str(index)] = (record, tokens)
         if errors:
@@ -234,6 +229,7 @@ class Translator:
                     errors[record.id] = str(exc)
                     failed.append(record)
                     continue
+                text = self.validator.normalize(text)
                 problems = self.validator.problems(record, text)
                 if problems:
                     errors[record.id] = "; ".join(problems)
