@@ -335,3 +335,22 @@ def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
     # a part that continues ev2 sees the previous part's corrections, not the drafts
     assert continued and all(line["translation"].startswith("Виправлено ")
                              for m in continued for line in m["earlier"])  # type: ignore[union-attr]
+
+
+def test_proofread_max_records(tmp_path: Path) -> None:
+    rows = [{"id": f"r{i}", "en": f"Short line {i}.", "who": "Rufus", "scene": "ev1"} for i in range(25)]
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    data = {"game": "Test", "target_lang": "uk",
+            "source": {"path": "strings.json", "records": "strings", "scene": "scene", "speaker": "who",
+                       "langs": {"en": "en"}},
+            "output": {"field": "uk"}, "proofread": {"max_records": 10, "context_lines": 3}}
+    cfg = config_from_dict(data, tmp_path)
+    store = Store(cfg.work_dir)
+    for record in Project(cfg).records:
+        store.put(record, "Рядок", "translated")
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1",
+                              provider_factory=lambda: FakeProvider(lambda s, u: "{}"))
+    proofreader.prepare()
+    packets = list(proofreader.packets("meaning").values())
+    assert [len(p["ids"]) for p in packets] == [10, 10, 5]
+    assert [len(p.get("earlier_ids", [])) for p in packets] == [0, 3, 3]
