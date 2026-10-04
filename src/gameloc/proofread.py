@@ -168,7 +168,7 @@ class Proofreader:
         """Packets that keep each scene whole when it fits; small scenes share a
         packet, a scene too large for one is split into consecutive packets.  A
         part that continues a dialogue scene carries "earlier", so it gets less room."""
-        full = self.snapshot.get("batch_chars") or max(
+        full: int = self.snapshot.get("batch_chars") or max(
             1000, self.snapshot["max_chars"] - len(self._system(stage)) - _HEADER_RESERVE)
         reserve = self.cfg.proofread.context_lines * _EARLIER_LINE_COST
         records = self.snapshot["records"]
