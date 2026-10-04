@@ -21,7 +21,13 @@ gameloc proofread export                # accepted → checkpoint with status "p
 gameloc export                          # into the game files
 ```
 
-`prepare` accepts `--scene` (review chapter by chapter) and `--include-proofread` (review already reviewed lines again).
+`prepare` accepts `--scene` (review chapter by chapter), `--include-proofread` (review already reviewed lines again)
+and `--include-manual` (hand edits are skipped by default: status `manual`, from `sheet-import`, `set` or `names --apply`).
+
+`gameloc proofread auto` does all of it in one command: it continues the latest run while it has unanswered packets,
+otherwise prepares a new run with every translated line not yet proofread (lines translated since the last run
+join the next one), runs every stage and exports. Safe to stop: run it again to continue. `--new` starts a new run
+anyway, `--scene` limits a new run, `--limit N` is a trial with at most N packets per stage.
 Without an explicit path it creates `gameloc_work/proofread/<date-time>`; other commands use the latest run.
 
 Proofreading may use a stronger model than translation:
@@ -94,7 +100,17 @@ A convenient loop for a human editor:
 gameloc sheet-export review.csv --scene chapter1
 # the translator edits the "translation" column
 gameloc sheet-import review.csv           # validation + status "manual"
+gameloc set ev12_034 "Fixed line"         # one line, e.g. after a play test
 ```
+
+Hand edits (status `manual`) are never sent to proofreading again unless `prepare --include-manual` is given,
+so a later proofreading run does not overwrite what a human fixed.
+
+Item, skill and place names are translated batch by batch, so one source name may end up with several
+spellings. `gameloc names` lists them in `names.json` with the spelling it would choose: the glossary target, or
+else the one most lines use among those that pass validation (length, `[fit]`) in every line, ties going to the
+shortest. Only single-line, tag-free source texts up to `--max-len` characters (40) outside dialogue scenes count.
+`names --apply` stores the choice as hand edits.
 
 `gameloc audit` checks the whole checkpoint (tags, scripts, Latin words, length, forbidden glossary variants);
 `audit --terms` also reports glossary terms of the source whose translation (by word start, so inflected forms

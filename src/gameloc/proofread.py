@@ -278,11 +278,14 @@ class Proofreader:
 
     # -- stages ------------------------------------------------------------
 
-    def prepare(self, *, scenes: list[str] | None = None, include_proofread: bool = False) -> dict[str, Any]:
+    def prepare(self, *, scenes: list[str] | None = None, include_proofread: bool = False,
+                include_manual: bool = False) -> dict[str, Any]:
+        """Snapshot translated lines.  Lines already proofread and hand edits (status
+        ``manual``: ``sheet-import``, ``set``, ``names --apply``) are left out unless included."""
         if (self.run_dir / "snapshot.json").exists():
             raise ValueError(f"run already prepared: {self.run_dir}")
         records: dict[str, Any] = {}
-        missing = 0
+        missing = manual = 0
         for record in self.project.records:
             if not record.translatable:
                 continue
@@ -292,7 +295,11 @@ class Proofreader:
             if draft is None:
                 missing += 1
                 continue
-            if not include_proofread and self.store.status(record) == "proofread":
+            status = self.store.status(record)
+            if not include_proofread and status == "proofread":
+                continue
+            if not include_manual and status == "manual":
+                manual += 1
                 continue
             records[record.id] = {"texts": record.texts, "scene": record.scene, "speaker": record.speaker,
                                   "context": record.context, "max_length": record.max_length,
@@ -309,7 +316,7 @@ class Proofreader:
         packets = self._pack("meaning", [(rid, self._view(rid, "meaning", {})) for rid in records])
         self._save_packets("meaning", packets)
         report = {"run": str(self.run_dir), "records": len(records), "untranslated": missing,
-                  "meaning_packets": len(packets)}
+                  "manual_skipped": manual, "meaning_packets": len(packets)}
         log.info("prepared %s", report)
         return report
 
@@ -516,6 +523,12 @@ class Proofreader:
                 break
         return report
 
+    def unfinished(self) -> str | None:
+        """The first stage not started yet or with unanswered packets; None when every stage is answered."""
+        stages = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
+        stages += [RESOLVE] if self.pending_packets(RESOLVE) else []
+        return stages[0] if stages else None
+
     def status(self) -> dict[str, Any]:
         report: dict[str, Any] = {"records": len(self.snapshot["records"])}
         for stage in STAGES + ((RESOLVE,) if self.packets(RESOLVE) else ()):
@@ -526,10 +539,9 @@ class Proofreader:
 
     def export(self) -> dict[str, Any]:
         """Store accepted (or resolved) lines as ``proofread``; list everything else in ``review.json``."""
-        unfinished = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
-        unfinished += [RESOLVE] if self.pending_packets(RESOLVE) else []
+        unfinished = self.unfinished()
         if unfinished:
-            raise ValueError(f"proofreading is not finished (stage {unfinished[0]}): run `proofread run` again")
+            raise ValueError(f"proofreading is not finished (stage {unfinished}): run `proofread run` again")
         snapshot_id = self.snapshot["snapshot_id"]
         notes = {stage: self.responses(stage) for stage in ALL_STAGES}
         exported = changed = 0

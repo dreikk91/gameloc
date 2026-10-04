@@ -15,12 +15,14 @@ from gameloc import (
     Translator,
     config_from_dict,
 )
-from gameloc.cli import audit, grep, show
+from gameloc.cli import audit, grep, names, proofread_auto, set_translation, show
+from gameloc.config import Config
 from gameloc.formats import load_table
 from gameloc.glossary import Glossary
+from gameloc.providers import QuotaExhausted
 from gameloc.records import Project, Record
 from gameloc.text import Validator, make_validator
-from gameloc.util import extract_json
+from gameloc.util import extract_json, pack_scenes
 
 
 class FakeProvider(Provider):
@@ -354,3 +356,81 @@ def test_proofread_max_records(tmp_path: Path) -> None:
     packets = list(proofreader.packets("meaning").values())
     assert [len(p["ids"]) for p in packets] == [10, 10, 5]
     assert [len(p.get("earlier_ids", [])) for p in packets] == [0, 3, 3]
+
+
+def test_pack_scenes_continued_budget() -> None:
+    items = [("ev", i) for i in range(6)] + [("menu", i) for i in range(6)]
+    groups = pack_scenes(items, lambda item: item[0], lambda item: 10, 30,
+                         continued=lambda first: 20 if first[0] == "ev" else 30)
+    # the first part of a split dialogue scene gets the full budget, its continuations less room
+    assert [len(group) for group in groups] == [3, 2, 1, 3, 3]
+
+
+def _proofread_project(tmp_path: Path) -> Config:
+    cfg = config_from_dict(_project(tmp_path), tmp_path)
+    Translator(cfg, provider_factory=lambda: FakeProvider(_translation_answer())).run()
+    return cfg
+
+
+def _approver(system: str, user: str) -> str:
+    packet = json.loads(user.removeprefix("DATA="))
+    stage = packet["stage"]
+    decision = {"meaning": "ok", "edit": "keep", "verify": "accept"}[stage]
+    records = [{"id": view["id"], "decision": decision, "note": "Добре."} for view in packet["records"]]
+    return json.dumps({"batch_id": packet["batch_id"], "stage": stage, "records": records}, ensure_ascii=False)
+
+
+def test_hand_edits_skip_proofreading(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    with pytest.raises(ValueError, match="markers|tag"):
+        set_translation(cfg, "c", "Бувай.")  # {name} is lost
+    assert set_translation(cfg, "c", "Бувай, {name}.")["previous"] == "Привіт{name}"
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1",
+                              provider_factory=lambda: FakeProvider(_approver))
+    report = proofreader.prepare()
+    assert (report["records"], report["manual_skipped"]) == (2, 1)
+    proofreader.run()
+    proofreader.export()
+    entry = Store(cfg.work_dir).entries["c"]
+    assert (entry["text"], entry["status"]) == ("Бувай, {name}.", "manual")
+
+
+def test_proofread_auto_continues_then_starts_new(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    calls = {"n": 0}
+
+    def flaky(system: str, user: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise QuotaExhausted("stop")
+        return _approver(system, user)
+
+    first = proofread_auto(cfg, provider_factory=lambda: FakeProvider(flaky))
+    assert first["prepare"]["records"] == 3 and first["result"].startswith("not finished")
+    second = proofread_auto(cfg, provider_factory=lambda: FakeProvider(_approver))
+    assert "prepare" not in second and second["export"]["exported"] == 3  # the same run continued
+    third = proofread_auto(cfg, provider_factory=lambda: FakeProvider(_approver))
+    assert third["result"] == "nothing to proofread"
+
+
+def test_names_one_spelling(tmp_path: Path) -> None:
+    rows = [{"id": f"m{i}", "en": "Lost Forest", "scene": f"menu{i}"} for i in range(3)]
+    rows += [{"id": "p", "en": "Potion", "scene": "items"}, {"id": "q", "en": "Potion", "scene": "shop"},
+             {"id": "t", "en": "Lost Forest", "who": "Rufus", "scene": "ev1"}]
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    (tmp_path / "terms.json").write_text(json.dumps([{"en": "Potion", "uk": "Зілля"}]), encoding="utf-8")
+    cfg = config_from_dict({"game": "Test", "target_lang": "uk",
+                            "source": {"path": "strings.json", "records": "strings", "scene": "scene",
+                                       "speaker": "who", "langs": {"en": "en"}},
+                            "output": {"field": "uk"}, "glossary": {"terms": "terms.json"}}, tmp_path)
+    store = Store(cfg.work_dir)
+    project = Project(cfg)
+    for rid, text in {"m0": "Загублений ліс", "m1": "Забутий ліс", "m2": "Загублений ліс",
+                      "p": "Мікстура", "q": "Зілля", "t": "Забутий ліс"}.items():
+        store.put(project.by_id[rid], text, "translated")
+    assert names(cfg)["would_change"] == 2
+    assert names(cfg, apply=True)["changed"] == 2
+    store = Store(cfg.work_dir)
+    assert {rid: store.entries[rid]["text"] for rid in ("m1", "p", "t")} == {
+        "m1": "Загублений ліс", "p": "Зілля", "t": "Забутий ліс"}  # dialogue lines are left alone
+    assert store.entries["m1"]["status"] == "manual"
