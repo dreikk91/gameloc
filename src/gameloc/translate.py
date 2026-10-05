@@ -17,7 +17,7 @@ from .providers import AuthError, ContextOverflow, Provider, ProviderError, Quot
 from .records import Project, Record
 from .store import Store
 from .text import TagMasker, make_validator
-from .util import dumps, extract_json, pack_scenes
+from .util import chain_by_scene, dumps, extract_json, pack_scenes
 
 log = logging.getLogger("gameloc")
 
@@ -116,15 +116,11 @@ class Translator:
         return item, tokens
 
     def _scene_rows(self, scenes: list[str]) -> list[Record]:
-        """Records of the batch's dialogue scenes (scenes with speakers) for the cast lookup."""
+        """Records of the batch's dialogue scenes for the cast lookup."""
         if not self.cfg.translate.scene_cast:
             return []
-        rows = []
-        for scene in scenes:
-            scene_records = self.project.by_scene.get(scene, [])
-            if any(record.speaker for record in scene_records):
-                rows += scene_records
-        return rows
+        return [row for scene in scenes if scene in self.project.dialogue_scenes
+                for row in self.project.by_scene[scene]]
 
     def _earlier_lines(self, records: list[Record]) -> list[str]:
         """Lines shown before each scene's first batch record that are not in the batch."""
@@ -351,22 +347,11 @@ class Translator:
         return report
 
     def chains(self, numbered: list[tuple[int, list[Record]]]) -> list[list[tuple[int, list[Record]]]]:
-        """Batches that share a dialogue scene (one with speakers) run one after
-        another in one worker, so a batch that continues a scene sees the
-        previous one's translations in its EARLIER LINES; other batches, and
-        menus or tables without speakers, still run in parallel."""
-        def dialogue(batch: list[Record]) -> set[str]:
-            by_scene = self.project.by_scene
-            return {r.scene for r in batch if r.scene and any(x.speaker for x in by_scene.get(r.scene, []))}
-
-        chains: list[list[tuple[int, list[Record]]]] = []
-        for item in numbered:
-            scenes = dialogue(item[1])
-            if chains and scenes & dialogue(chains[-1][-1][1]):
-                chains[-1].append(item)
-            else:
-                chains.append([item])
-        return chains
+        """Batches that share a dialogue scene run one after another in one worker, so a batch
+        that continues a scene sees the previous one's translations in its EARLIER LINES;
+        other batches, and menus or tables without speakers, still run in parallel."""
+        dialogue = self.project.dialogue_scenes
+        return chain_by_scene(numbered, lambda item: {r.scene for r in item[1]} & dialogue)
 
     def _run_chain(self, chain: list[tuple[int, list[Record]]], total: int, report: Report) -> None:
         for index, batch in chain:

@@ -100,6 +100,7 @@ def _entries(data: Any) -> Iterator[dict[str, Any]]:
 class Glossary:
     def __init__(self, terms: list[Term], max_terms: int = 30, max_characters: int = 12) -> None:
         self.terms = terms
+        self.characters = [term for term in terms if term.character]
         self.max_terms = max_terms
         self.max_characters = max_characters
         self._by_name: dict[str, Term] = {}
@@ -190,7 +191,7 @@ class Glossary:
         scene_raw = "\n".join(scene_texts)
         if scene_raw:
             scene_folded = scene_raw.casefold()
-            for term in self.terms:
-                if term.character and term not in characters and term.matches(scene_raw, scene_folded):
+            for term in self.characters:
+                if term not in characters and term.matches(scene_raw, scene_folded):
                     characters.append(term)
         return characters[: self.max_characters], terms[: self.max_terms]

@@ -173,6 +173,24 @@ def _repair_array(text: str) -> list[Any] | None:
     return None
 
 
+def chain_by_scene(items: list[T], scenes: Callable[[T], set[str]]) -> list[list[T]]:
+    """Group consecutive items that share a scene into chains.
+
+    Parts of one scene have to be answered in order, because each one sees the previous part's
+    result, so a chain belongs to a single worker; different chains still run in parallel.
+    """
+    chains: list[list[T]] = []
+    previous: set[str] = set()
+    for item in items:
+        current = scenes(item)
+        if chains and current & previous:
+            chains[-1].append(item)
+        else:
+            chains.append([item])
+        previous = current
+    return chains
+
+
 def pack_scenes(items: list[T], scene: Callable[[T], str], cost: Callable[[T], int], budget: int, *,
                 max_items: int = 0, merge: bool = True, merge_max: int = 0,
                 continued: Callable[[T], int] | None = None) -> list[list[T]]:

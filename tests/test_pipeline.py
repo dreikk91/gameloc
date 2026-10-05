@@ -358,6 +358,26 @@ def test_proofread_max_records(tmp_path: Path) -> None:
     assert [len(p.get("earlier_ids", [])) for p in packets] == [0, 3, 3]
 
 
+def test_earlier_lines_include_lines_outside_the_run(tmp_path: Path) -> None:
+    rows = [{"id": f"r{i}", "en": f"Short line {i}.", "who": "Rufus", "scene": "ev1"} for i in range(4)]
+    (tmp_path / "strings.json").write_text(json.dumps({"strings": rows}), encoding="utf-8")
+    cfg = config_from_dict({"game": "Test", "target_lang": "uk",
+                            "source": {"path": "strings.json", "records": "strings", "scene": "scene",
+                                       "speaker": "who", "langs": {"en": "en"}},
+                            "output": {"field": "uk"},
+                            "proofread": {"max_records": 2, "context_lines": 2}}, tmp_path)
+    store, project = Store(cfg.work_dir), Project(cfg)
+    for record in project.records:
+        store.put(record, "Рядок " + record.id, "translated")
+    store.put(project.by_id["r1"], "Ручна правка", "manual")  # a hand edit: left out of the run
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1")
+    assert proofreader.prepare()["records"] == 3
+    packet = next(p for p in proofreader.packets("meaning").values() if p["ids"] == ["r3"])
+    # the hand edit is context, in its stored version, although it is not reviewed
+    assert packet["earlier_ids"] == ["r1", "r2"]
+    assert "Ручна правка" in proofreader.message(packet)
+
+
 def test_pack_scenes_continued_budget() -> None:
     items = [("ev", i) for i in range(6)] + [("menu", i) for i in range(6)]
     groups = pack_scenes(items, lambda item: item[0], lambda item: 10, 30,
@@ -448,4 +468,6 @@ def test_names_one_spelling(tmp_path: Path) -> None:
     store = Store(cfg.work_dir)
     assert {rid: store.entries[rid]["text"] for rid in ("m1", "p", "t")} == {
         "m1": "Загублений ліс", "p": "Зілля", "t": "Забутий ліс"}  # dialogue lines are left alone
-    assert store.entries["m1"]["status"] == "manual"
+    assert store.entries["m1"]["status"] == "unified"
+    report = Proofreader(cfg, cfg.work_dir / "proofread" / "r1").prepare()
+    assert report["manual_skipped"] == 2  # unified names are left alone like hand edits

@@ -23,9 +23,19 @@ from .glossary import Glossary
 from .prompts import proofread_system
 from .providers import AuthError, Provider, ProviderError, QuotaExhausted, create_provider
 from .records import Project, Record
-from .store import Store
+from .store import HAND_EDITED, Store
 from .text import TagMasker, make_validator
-from .util import dumps, extract_json, iter_jsonl, pack_scenes, read_json, sha256, write_json, write_text_atomic
+from .util import (
+    chain_by_scene,
+    dumps,
+    extract_json,
+    iter_jsonl,
+    pack_scenes,
+    read_json,
+    sha256,
+    write_json,
+    write_text_atomic,
+)
 
 log = logging.getLogger("gameloc")
 
@@ -122,10 +132,8 @@ class Proofreader:
         records = [self.record(record_id) for record_id, _ in items]
         scene_rows: list[Record] = []
         if self.cfg.translate.scene_cast:
-            for scene in dict.fromkeys(r.scene for r in records if r.scene):
-                rows = self.project.by_scene.get(scene, [])
-                if any(row.speaker for row in rows):
-                    scene_rows += rows
+            for scene in dict.fromkeys(r.scene for r in records if r.scene in self.project.dialogue_scenes):
+                scene_rows += self.project.by_scene[scene]
         characters, terms = self.glossary.relevant(
             (text for r in records for text in r.texts.values()), (r.speaker for r in records),
             (text for r in scene_rows for text in r.texts.values()), (r.speaker for r in scene_rows))
@@ -179,7 +187,7 @@ class Proofreader:
             return str(records[item[0]]["scene"])
 
         def continued(item: tuple[str, dict[str, Any]]) -> int:
-            return max(1000, full - reserve) if scene(item) in self._dialogue_scenes() else full
+            return max(1000, full - reserve) if scene(item) in self.project.dialogue_scenes else full
 
         opts = self.cfg.translate
         groups = pack_scenes(items, scene, lambda item: len(dumps(item[1])) + 8, full,
@@ -187,64 +195,64 @@ class Proofreader:
                              merge_max=opts.merge_max_lines, continued=continued)
         return [self._packet(stage, group) for group in groups]
 
-    def _dialogue_scenes(self) -> set[str]:
-        """Scenes with speakers: the ones read as a conversation."""
-        records = self.snapshot["records"]
-        if getattr(self, "_dialogue_of", None) is not records:
-            self._dialogue_of = records
-            self._dialogue = {item["scene"] for item in records.values() if item["scene"] and item["speaker"]}
-        return self._dialogue
-
     def _earlier_ids(self, record_ids: list[str]) -> list[str]:
-        """Ids of the lines just before a packet that starts mid-scene."""
+        """Ids of the translated lines just before a packet that starts mid-scene.
+
+        They come from the project, not from this run, so the lines a run leaves out (already
+        proofread or hand-edited ones) are context too, in their stored version.
+        """
         count = self.cfg.proofread.context_lines
         if count <= 0:
             return []
-        records = self.snapshot["records"]
-        if getattr(self, "_order_of", None) is not records:
-            self._order_of, self._order = records, list(records)
-            self._position = {record_id: index for index, record_id in enumerate(self._order)}
-        order, position = self._order, self._position
         inside = set(record_ids)
         result: list[str] = []
         seen: set[str] = set()
         for record_id in record_ids:
-            scene = records[record_id]["scene"]
-            if not scene or scene in seen or scene not in self._dialogue_scenes():
+            record = self.project.by_id.get(record_id)
+            if record is None or record.scene in seen or record.scene not in self.project.dialogue_scenes:
                 continue  # menus and tables need no preceding lines
-            seen.add(scene)
-            start = position[record_id]
-            result += [rid for rid in order[max(0, start - count):start]
-                       if records[rid]["scene"] == scene and rid not in inside]
+            seen.add(record.scene)
+            result += [row.id for row in self.project.preceding(record, count)
+                       if row.id not in inside and self._stored(row.id)]
         return result
 
+    def _stored(self, record_id: str) -> str | None:
+        """The line as this run found it: its draft, or the stored translation of a line
+        outside the run (an already proofread or hand-edited neighbour)."""
+        item = self.snapshot["records"].get(record_id)
+        if item:
+            return str(item["draft"])
+        record = self.project.by_id.get(record_id)
+        return self.store.translation(record) if record else None
+
     def _latest(self, record_id: str) -> str:
-        """The line as it stands now: the edit stage's correction once that
-        stage answered it, otherwise the draft."""
-        draft: str = self.snapshot["records"][record_id]["draft"]
+        """The line as it stands now: the edit stage's correction once that stage answered it."""
+        stored = self._stored(record_id) or ""
         if not self._edit_batch:  # edit packets appear once that stage starts
             self._edit_batch = {rid: batch for batch, packet in self.packets("edit").items() for rid in packet["ids"]}
         batch = self._edit_batch.get(record_id)
         if batch is None:
-            return draft
+            return stored
         if batch not in self._edit_answers:
             path = self._response_path("edit", batch)
             if not path.exists():
-                return draft
+                return stored
             self._edit_answers[batch] = {item["id"]: item for item in read_json(path)["records"]}
         answer = self._edit_answers[batch].get(record_id, {})
-        return str(answer.get("translation") or draft)
+        return str(answer.get("translation") or stored)
 
     def _earlier_lines(self, stage: str, record_ids: list[str]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for rid in record_ids:
-            record = self.record(rid)
+            record = self.project.by_id.get(rid)
+            if record is None:
+                continue  # the source line is gone since the packet was built
             line: dict[str, Any] = {"scene": record.scene}
             if record.speaker:
                 line["speaker"] = self.glossary.speaker_label(record.speaker)
             line[next(iter(record.texts))] = self.masker.strip(record.source)
-            text = self.snapshot["records"][rid]["draft"] if stage == "meaning" else self._latest(rid)
-            line["translation"] = self.masker.strip(text)
+            text = self._stored(rid) if stage == "meaning" else self._latest(rid)
+            line["translation"] = self.masker.strip(text or "")
             result.append(line)
         return result
 
@@ -281,8 +289,8 @@ class Proofreader:
 
     def prepare(self, *, scenes: list[str] | None = None, include_proofread: bool = False,
                 include_manual: bool = False) -> dict[str, Any]:
-        """Snapshot translated lines.  Lines already proofread and hand edits (status
-        ``manual``: ``sheet-import``, ``set``, ``names --apply``) are left out unless included."""
+        """Snapshot translated lines.  Lines already proofread and hand edits (``manual`` from
+        ``sheet-import`` or ``set``, ``unified`` from ``names --apply``) are left out unless included."""
         if (self.run_dir / "snapshot.json").exists():
             raise ValueError(f"run already prepared: {self.run_dir}")
         records: dict[str, Any] = {}
@@ -299,7 +307,7 @@ class Proofreader:
             status = self.store.status(record)
             if not include_proofread and status == "proofread":
                 continue
-            if not include_manual and status == "manual":
+            if not include_manual and status in HAND_EDITED:
                 manual += 1
                 continue
             records[record.id] = {"texts": record.texts, "scene": record.scene, "speaker": record.speaker,
@@ -475,21 +483,10 @@ class Proofreader:
         return False
 
     def chains(self, packets: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-        """Consecutive packets of one dialogue scene (one with speakers, too
-        large for one packet) are answered in order by one worker; the rest,
-        including split menus and tables, run in parallel."""
-        records = self.snapshot["records"]
-        dialogue = self._dialogue_scenes()
-        chains: list[list[dict[str, Any]]] = []
-        previous: set[str] = set()
-        for packet in packets:
-            scenes = {records[rid]["scene"] for rid in packet["ids"]} & dialogue
-            if chains and scenes & previous:
-                chains[-1].append(packet)
-            else:
-                chains.append([packet])
-            previous = scenes
-        return chains
+        """Consecutive packets of one dialogue scene (too large for one packet) are answered
+        in order by one worker; the rest, including split menus and tables, run in parallel."""
+        records, dialogue = self.snapshot["records"], self.project.dialogue_scenes
+        return chain_by_scene(packets, lambda p: {records[rid]["scene"] for rid in p["ids"]} & dialogue)
 
     def run(self, stage: str | None = None, *, limit: int | None = None) -> dict[str, Any]:
         """Answer pending packets; without ``stage`` walk through all stages, advancing automatically."""

@@ -234,21 +234,20 @@ def names(cfg: Config, apply: bool = False, max_len: int = 40) -> dict[str, Any]
     Item, skill and place names are translated batch by batch, so one source
     name ends up with several spellings.  For every single-line, tag-free source
     text of at most ``max_len`` characters outside dialogue scenes that has more
-    than one translation, pick the glossary target, or else the spelling most
-    records use among those that pass validation (``[fit]``, ``max_length``...)
-    in every record, ties going to the shortest.  ``apply`` stores it as a
-    hand edit (status ``manual``).
+    than one translation, take the first spelling that passes validation (``[fit]``,
+    ``max_length``...) in every record: the glossary target, then the spellings the
+    records use, most used first, ties going to the shortest.  ``apply`` stores the
+    choice with status ``unified``, which proofreading leaves alone like a hand edit.
     """
     project, store = Project(cfg), Store(cfg.work_dir)
     masker = TagMasker.from_config(cfg.tags)
     validator = make_validator(cfg, masker)
     glossary = {term.source.casefold(): term.target for term in Glossary.load(cfg).terms}
-    dialogue = {record.scene for record in project.records if record.scene and record.speaker}
     groups: dict[str, list[tuple[Record, str]]] = {}
     for record in project.records:
         text = store.translation(record)
         source = record.source
-        if (text is None or not record.translatable or record.scene in dialogue
+        if (text is None or not record.translatable or record.scene in project.dialogue_scenes
                 or "\n" in source or len(source) > max_len or masker.mask(source)[1]):
             continue
         groups.setdefault(source, []).append((record, text))
@@ -259,16 +258,16 @@ def names(cfg: Config, apply: bool = False, max_len: int = 40) -> dict[str, Any]
         if len(spellings) < 2:
             continue
         target = glossary.get(source.casefold())
-        candidates = [target] if target else sorted(spellings, key=lambda t: (-spellings[t], len(t)))
+        candidates = ([target] if target else []) + sorted(spellings, key=lambda t: (-spellings[t], len(t)))
         chosen = next((c for c in candidates if all(not validator.problems(r, c) for r, _ in rows)), None)
-        report.append({"source": source, "chosen": chosen, "glossary": bool(target), "variants": dict(spellings)})
+        report.append({"source": source, "chosen": chosen, "glossary": target, "variants": dict(spellings)})
         if chosen is None:
             continue
         for record, text in rows:
             if text != chosen:
                 changed += 1
                 if apply:
-                    store.put(record, chosen, "manual", previous=text, unified=True)
+                    store.put(record, chosen, "unified", previous=text)
     path = cfg.work_dir / "names.json"
     write_json(path, report)
     return {"names": len(report), "unresolved": sum(1 for item in report if item["chosen"] is None),

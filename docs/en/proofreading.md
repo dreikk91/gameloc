@@ -22,7 +22,8 @@ gameloc export                          # into the game files
 ```
 
 `prepare` accepts `--scene` (review chapter by chapter), `--include-proofread` (review already reviewed lines again)
-and `--include-manual` (hand edits are skipped by default: status `manual`, from `sheet-import`, `set` or `names --apply`).
+and `--include-manual` (hand edits are skipped by default: status `manual` from `sheet-import` or `set`,
+`unified` from `names --apply`).
 
 `gameloc proofread auto` does all of it in one command: it continues the latest run while it has unanswered packets,
 otherwise prepares a new run with every translated line not yet proofread (lines translated since the last run
@@ -54,13 +55,16 @@ gameloc_work/proofread/20260924-101500/
 - Every answer is validated: same `batch_id` and stage, every id exactly once, an allowed decision,
   a non-empty note; for `change` also tag markers and full text validation. A rejected answer goes back
   to the model with the error description (`attempts`).
-- Answers are bound to the prompt hash: if a packet changed, an old answer is never silently reused.
+- Answers are bound to the prompt hash, which covers everything under review (the lines, the
+  glossary, the stage prompt): if a packet changed, an old answer is never silently reused.
+  `earlier` is read-only context built when the packet is sent, so it is not part of the hash.
 - `export` skips lines whose draft or source changed after the snapshot — they go to `review.json`.
 - A run can be interrupted at any time: `run` only answers packets that have no answer yet.
 - Packets follow scenes: a scene that fits stays whole in one packet (small scenes share one);
   a larger scene is split into consecutive packets that carry the scene's preceding lines as
   `earlier` (`proofread.context_lines`) and are answered in order by one worker. `earlier` is built
-  when the packet is sent, so it shows the previous part as the edit stage already corrected it.
+  when the packet is sent, so it shows the previous part as the edit stage already corrected it,
+  and it includes the scene's lines the run left out (already proofread or hand-edited ones) as stored.
 
 ## Manual mode (any chat UI)
 
@@ -103,14 +107,15 @@ gameloc sheet-import review.csv           # validation + status "manual"
 gameloc set ev12_034 "Fixed line"         # one line, e.g. after a play test
 ```
 
-Hand edits (status `manual`) are never sent to proofreading again unless `prepare --include-manual` is given,
-so a later proofreading run does not overwrite what a human fixed.
+Hand edits are never sent to proofreading again unless `prepare --include-manual` is given, so a later
+run does not overwrite what a human fixed. The checkpoint keeps who decided: `manual` for a person
+(`sheet-import`, `set`), `unified` for `names --apply`, `proofread` for the review itself.
 
 Item, skill and place names are translated batch by batch, so one source name may end up with several
-spellings. `gameloc names` lists them in `names.json` with the spelling it would choose: the glossary target, or
-else the one most lines use among those that pass validation (length, `[fit]`) in every line, ties going to the
-shortest. Only single-line, tag-free source texts up to `--max-len` characters (40) outside dialogue scenes count.
-`names --apply` stores the choice as hand edits.
+spellings. `gameloc names` lists them in `names.json` with the spelling it would choose: the first one that
+passes validation (length, `[fit]`) in every line — the glossary target, then the spellings the lines use,
+most used first, ties going to the shortest. Only single-line, tag-free source texts up to `--max-len`
+characters (40) outside dialogue scenes count. `names --apply` stores the choice with status `unified`.
 
 `gameloc audit` checks the whole checkpoint (tags, scripts, Latin words, length, forbidden glossary variants);
 `audit --terms` also reports glossary terms of the source whose translation (by word start, so inflected forms

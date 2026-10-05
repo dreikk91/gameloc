@@ -63,6 +63,8 @@ class Project:
             if record.scene:
                 self.by_scene.setdefault(record.scene, []).append(record)
         self._scene_pos = {record.id: pos for rows in self.by_scene.values() for pos, record in enumerate(rows)}
+        # scenes with speakers: the ones read as a conversation (menus and tables are not)
+        self.dialogue_scenes = {scene for scene, rows in self.by_scene.items() if any(r.speaker for r in rows)}
 
     def preceding(self, record: Record, count: int) -> list[Record]:
         """Up to ``count`` records shown right before ``record`` in its scene."""
