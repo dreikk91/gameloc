@@ -22,7 +22,7 @@ from gameloc.glossary import Glossary
 from gameloc.providers import QuotaExhausted
 from gameloc.records import Project, Record
 from gameloc.text import Validator, make_validator
-from gameloc.util import extract_json, pack_scenes
+from gameloc.util import extract_json, pack_scenes, read_json, write_json
 
 
 class FakeProvider(Provider):
@@ -411,6 +411,21 @@ def test_proofread_auto_continues_then_starts_new(tmp_path: Path) -> None:
     assert "prepare" not in second and second["export"]["exported"] == 3  # the same run continued
     third = proofread_auto(cfg, provider_factory=lambda: FakeProvider(_approver))
     assert third["result"] == "nothing to proofread"
+    fourth = proofread_auto(cfg, provider_factory=lambda: FakeProvider(_approver))
+    # an empty run is not left behind: it would look like the unfinished latest one for ever
+    assert fourth["result"] == "nothing to proofread"
+    assert len(list((cfg.work_dir / "proofread").iterdir())) == 1
+
+
+def test_next_prompt_of_a_run_without_that_stage_prompt(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    run = cfg.work_dir / "proofread" / "r1"
+    Proofreader(cfg, run).prepare()
+    snapshot = read_json(run / "snapshot.json")
+    snapshot["prompts"].pop("meaning")  # a run prepared before that stage existed
+    write_json(run / "snapshot.json", snapshot)
+    found = Proofreader(cfg, run).next_prompt("meaning")
+    assert found and "DATA=" in found[1].read_text(encoding="utf-8")
 
 
 def test_names_one_spelling(tmp_path: Path) -> None:

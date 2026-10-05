@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from shutil import rmtree
 from typing import Any
 
 from . import __version__
@@ -296,6 +297,7 @@ def proofread_auto(cfg: Config, *, new: bool = False, scenes: list[str] | None =
         run_dir = _new_run(cfg)
         report["prepare"] = Proofreader(cfg, run_dir).prepare(scenes=scenes)
         if not report["prepare"]["records"]:
+            rmtree(run_dir)  # an empty run would look like the unfinished latest one for ever
             return {**report, "result": "nothing to proofread"}
     proofreader = Proofreader(cfg, run_dir, provider_factory=provider_factory)
     report["run"] = proofreader.run(limit=limit)

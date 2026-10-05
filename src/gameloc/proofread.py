@@ -57,6 +57,8 @@ class Proofreader:
         options = cfg.provider_options(provider or cfg.proofread.provider or cfg.translate.provider, model)
         self.provider_factory = provider_factory or (lambda: create_provider(options))
         self._snapshot: dict[str, Any] | None = None
+        self._edit_batch: dict[str, str] = {}
+        self._edit_answers: dict[str, dict[str, Any]] = {}
         self._local = threading.local()
         self._stop = threading.Event()
 
@@ -220,9 +222,8 @@ class Proofreader:
         """The line as it stands now: the edit stage's correction once that
         stage answered it, otherwise the draft."""
         draft: str = self.snapshot["records"][record_id]["draft"]
-        if not getattr(self, "_edit_batch", None):  # edit packets appear once that stage starts
+        if not self._edit_batch:  # edit packets appear once that stage starts
             self._edit_batch = {rid: batch for batch, packet in self.packets("edit").items() for rid in packet["ids"]}
-            self._edit_answers: dict[str, dict[str, Any]] = {}
         batch = self._edit_batch.get(record_id)
         if batch is None:
             return draft
@@ -433,7 +434,7 @@ class Proofreader:
             return None
         packet = pending[0]
         path = self.run_dir / stage / f"next-{packet['batch_id']}.txt"
-        write_text_atomic(path, self.snapshot["prompts"][stage] + "\n\n" + self.message(packet))
+        write_text_atomic(path, self._system(stage) + "\n\n" + self.message(packet))
         return packet["batch_id"], path
 
     def _provider(self) -> Provider:
@@ -525,6 +526,8 @@ class Proofreader:
 
     def unfinished(self) -> str | None:
         """The first stage not started yet or with unanswered packets; None when every stage is answered."""
+        if not self.snapshot["records"]:
+            return None  # an empty run (nothing was left to proofread) has nothing to continue
         stages = [stage for stage in STAGES if not self.packets(stage) or self.pending_packets(stage)]
         stages += [RESOLVE] if self.pending_packets(RESOLVE) else []
         return stages[0] if stages else None
