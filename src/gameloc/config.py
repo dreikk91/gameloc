@@ -171,6 +171,10 @@ class TranslateConfig:
     log_responses: bool = True
     batch_chars: int = 0
     """Characters of line data per batch; overrides the budget derived from max_chars (0 = derive)."""
+    scene_cast: bool = True
+    """CHARACTERS lists the whole scene's speakers and mentioned characters, not just the batch's."""
+    context_lines: int = 0
+    """Earlier lines of the scene shown (read-only) when a batch starts mid-scene."""
 
 
 @dataclass
@@ -181,6 +185,10 @@ class ProofreadConfig:
     workers: int = 1
     batch_chars: int = 0
     """Characters of record data per packet (whole scenes); overrides the budget derived from max_chars."""
+    context_lines: int = 12
+    """A packet that continues a scene gets this many preceding lines, in their latest version."""
+    max_records: int = 0
+    """At most this many lines to review per packet (0: only ``max_chars`` limits)."""
 
 
 @dataclass

@@ -13,6 +13,10 @@ if TYPE_CHECKING:
     from .records import Record
 
 
+HAND_EDITED = ("manual", "unified")
+"""Statuses proofreading leaves alone: ``manual`` (a person wrote it), ``unified`` (``names --apply``)."""
+
+
 def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 

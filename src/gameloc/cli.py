@@ -10,15 +10,17 @@ import logging
 import re
 import sys
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from shutil import rmtree
 from typing import Any
 
 from . import __version__
 from .config import Config, load_config
 from .glossary import Glossary
 from .proofread import ALL_STAGES, RESOLVE, Proofreader
-from .providers import create_provider
+from .providers import Provider, create_provider
 from .records import Project, Record
 from .store import Store
 from .text import TagMasker, make_validator
@@ -212,6 +214,98 @@ def sheet_import(cfg: Config, path: Path) -> dict[str, int]:
     return {"imported": changed, "rejected": rejected}
 
 
+def set_translation(cfg: Config, record_id: str, text: str, force: bool = False) -> dict[str, Any]:
+    """Store a hand edit (status ``manual``: proofreading leaves it alone)."""
+    project, store = Project(cfg), Store(cfg.work_dir)
+    record = project.by_id.get(record_id)
+    if record is None:
+        raise ValueError(f"unknown record id {record_id!r}")
+    problems = make_validator(cfg, TagMasker.from_config(cfg.tags)).problems(record, text)
+    if problems and not force:
+        raise ValueError(f"{record_id}: " + "; ".join(problems) + " (use --force to store it anyway)")
+    previous = store.translation(record)
+    store.put(record, text, "manual", previous=previous)
+    return {"id": record_id, "previous": previous, "translation": text, "problems": problems}
+
+
+def names(cfg: Config, apply: bool = False, max_len: int = 40) -> dict[str, Any]:
+    """One spelling per short name.
+
+    Item, skill and place names are translated batch by batch, so one source
+    name ends up with several spellings.  For every single-line, tag-free source
+    text of at most ``max_len`` characters outside dialogue scenes that has more
+    than one translation, take the first spelling that passes validation (``[fit]``,
+    ``max_length``...) in every record: the glossary target, then the spellings the
+    records use, most used first, ties going to the shortest.  ``apply`` stores the
+    choice with status ``unified``, which proofreading leaves alone like a hand edit.
+    """
+    project, store = Project(cfg), Store(cfg.work_dir)
+    masker = TagMasker.from_config(cfg.tags)
+    validator = make_validator(cfg, masker)
+    glossary = {term.source.casefold(): term.target for term in Glossary.load(cfg).terms}
+    groups: dict[str, list[tuple[Record, str]]] = {}
+    for record in project.records:
+        text = store.translation(record)
+        source = record.source
+        if (text is None or not record.translatable or record.scene in project.dialogue_scenes
+                or "\n" in source or len(source) > max_len or masker.mask(source)[1]):
+            continue
+        groups.setdefault(source, []).append((record, text))
+    report: list[dict[str, Any]] = []
+    changed = 0
+    for source, rows in sorted(groups.items()):
+        spellings = Counter(text for _, text in rows)
+        if len(spellings) < 2:
+            continue
+        target = glossary.get(source.casefold())
+        candidates = ([target] if target else []) + sorted(spellings, key=lambda t: (-spellings[t], len(t)))
+        chosen = next((c for c in candidates if all(not validator.problems(r, c) for r, _ in rows)), None)
+        report.append({"source": source, "chosen": chosen, "glossary": target, "variants": dict(spellings)})
+        if chosen is None:
+            continue
+        for record, text in rows:
+            if text != chosen:
+                changed += 1
+                if apply:
+                    store.put(record, chosen, "unified", previous=text)
+    path = cfg.work_dir / "names.json"
+    write_json(path, report)
+    return {"names": len(report), "unresolved": sum(1 for item in report if item["chosen"] is None),
+            ("changed" if apply else "would_change"): changed, "report": str(path)}
+
+
+def _new_run(cfg: Config) -> Path:
+    """A fresh run folder named by the time (with a suffix when two runs start in the same second)."""
+    base = cfg.work_dir / "proofread" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    path, number = base, 1
+    while path.exists():
+        number += 1
+        path = base.with_name(f"{base.name}-{number}")
+    return path
+
+
+def proofread_auto(cfg: Config, *, new: bool = False, scenes: list[str] | None = None, limit: int | None = None,
+                   provider_factory: Callable[[], Provider] | None = None) -> dict[str, Any]:
+    """Continue the latest run while it is unfinished, else start a new one with every
+    translated line not yet proofread; run all stages, then export."""
+    root = cfg.work_dir / "proofread"
+    runs = sorted(p for p in root.glob("*") if (p / "snapshot.json").exists())
+    run_dir = runs[-1] if runs else None
+    report: dict[str, Any] = {}
+    if run_dir is None or new or scenes or not Proofreader(cfg, run_dir).unfinished():
+        run_dir = _new_run(cfg)
+        report["prepare"] = Proofreader(cfg, run_dir).prepare(scenes=scenes)
+        if not report["prepare"]["records"]:
+            rmtree(run_dir)  # an empty run would look like the unfinished latest one for ever
+            return {**report, "result": "nothing to proofread"}
+    proofreader = Proofreader(cfg, run_dir, provider_factory=provider_factory)
+    report["run"] = proofreader.run(limit=limit)
+    stage = proofreader.unfinished()
+    if stage:
+        return {**report, "result": f"not finished (stage {stage}): run again to continue"}
+    return {**report, "export": proofreader.export()}
+
+
 def test_provider(cfg: Config, name: str | None, model: str | None) -> str:
     provider = create_provider(cfg.provider_options(name or cfg.translate.provider, model))
     completion = provider.complete(
@@ -272,6 +366,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("export", help="write translations into copies of the game files")
 
+    p = commands.add_parser("set", help="store a hand edit of one line (proofreading leaves it alone)")
+    p.add_argument("id")
+    p.add_argument("text")
+    p.add_argument("--force", action="store_true", help="store it even if validation fails")
+    p = commands.add_parser("names", help="one spelling per short name (items, places, skills)")
+    p.add_argument("--apply", action="store_true", help="store the chosen spellings as hand edits")
+    p.add_argument("--max-len", type=int, default=40, help="longest source text treated as a name")
+
     p = commands.add_parser("sheet-export", help="CSV for human review")
     p.add_argument("path", type=Path)
     p.add_argument("--scene", nargs="+")
@@ -284,6 +386,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run", type=Path, nargs="?")
     p.add_argument("--scene", nargs="+")
     p.add_argument("--include-proofread", action="store_true")
+    p.add_argument("--include-manual", action="store_true", help="also review hand edits")
+    p = proof.add_parser("auto", help="continue the latest run or start a new one, run every stage, export")
+    p.add_argument("--new", action="store_true", help="start a new run even if the latest is unfinished")
+    p.add_argument("--scene", nargs="+", help="a new run covers only these scenes (prefix match)")
+    p.add_argument("--limit", type=int, help="at most N packets per stage")
+    p.add_argument("--workers", type=int)
     p = proof.add_parser("run", help="answer packets with the provider (all stages by default)")
     p.add_argument("run", type=Path, nargs="?")
     p.add_argument("--stage", choices=ALL_STAGES)
@@ -346,11 +454,20 @@ def run(args: argparse.Namespace) -> Any:
         return f"{sheet_export(cfg, args.path, args.scene)} rows -> {args.path}"
     if args.command == "sheet-import":
         return sheet_import(cfg, args.path)
+    if args.command == "set":
+        return set_translation(cfg, args.id, args.text, args.force)
+    if args.command == "names":
+        return names(cfg, args.apply, args.max_len)
 
     # proofread
     if args.action == "prepare":
-        run_dir = args.run or cfg.work_dir / "proofread" / datetime.now().strftime("%Y%m%d-%H%M%S")
-        return Proofreader(cfg, run_dir).prepare(scenes=args.scene, include_proofread=args.include_proofread)
+        run_dir = args.run or _new_run(cfg)
+        return Proofreader(cfg, run_dir).prepare(scenes=args.scene, include_proofread=args.include_proofread,
+                                                 include_manual=args.include_manual)
+    if args.action == "auto":
+        if args.workers:
+            cfg.proofread.workers = args.workers
+        return proofread_auto(cfg, new=args.new, scenes=args.scene, limit=args.limit)
     run_dir = args.run or _latest_run(cfg)
     if args.action in ("run", "resolve"):
         if args.workers:

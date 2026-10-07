@@ -168,10 +168,14 @@ goes back to the model with the reason ("3 lines, the box shows 2"), like any ot
 | `reuse` | `true` | reuse the translation of an identical line from the checkpoint |
 | `log_responses` | `true` | write raw replies to `responses.jsonl` |
 | `batch_chars` | `0` | characters of line data per batch; replaces the budget derived from `max_chars` (0 = derive) |
+| `scene_cast` | `true` | in scenes with speakers, CHARACTERS lists everyone who speaks or is named anywhere in the scene, not only in the batch (also used by proofreading) |
+| `context_lines` | 0 | when a batch starts mid-scene, show up to this many earlier lines of the scene (speaker, source, existing translation) as read-only context. Batches of one dialogue scene run in order in one worker, so the earlier lines are already translated |
 
 ## `[proofread]`
 
-`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `batch_chars` (0: characters of record data per packet,
+`provider`, `max_chars` (12000), `attempts` (2), `workers` (1), `context_lines` (12: preceding lines a packet that continues a scene receives),
+`max_records` (0: lines per packet; long packets get a shallower review),
+`batch_chars` (0: characters of record data per packet,
 e.g. `8000` for whole scenes of about that size, instead of subtracting the prompt from `max_chars`).
 See [proofreading](proofreading.md).
 

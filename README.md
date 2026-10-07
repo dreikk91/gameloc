@@ -86,6 +86,9 @@ rpm = 10
 | `show ID [--context N]` / `grep REGEX` | a line with its neighbours / search sources and translations |
 | `export` | write translations into the game files (`[output]`) |
 | `sheet-export FILE.csv` / `sheet-import FILE.csv` | spreadsheet round trip for human editors |
+| `set ID TEXT` | store a hand edit of one line (e.g. after a play test); proofreading leaves hand edits alone |
+| `names [--apply]` | one spelling per short name (items, places, skills) translated differently in different batches |
+| `proofread auto` | continue the latest run or start a new one, run every stage, export |
 | `proofread prepare / run / advance / next / submit / status / export / resolve` | three-pass proofreading; `resolve` settles `review.json` |
 | `stats` | requests and tokens per provider/model |
 

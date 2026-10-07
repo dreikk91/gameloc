@@ -17,11 +17,12 @@ from .providers import AuthError, ContextOverflow, Provider, ProviderError, Quot
 from .records import Project, Record
 from .store import Store
 from .text import TagMasker, make_validator
-from .util import dumps, extract_json, pack_scenes
+from .util import chain_by_scene, dumps, extract_json, pack_scenes
 
 log = logging.getLogger("gameloc")
 
 _HEADER_RESERVE = 2000  # characters kept free for the scene, character and glossary header
+_EARLIER_LINE_COST = 200  # rough size of one EARLIER LINES entry
 
 
 @dataclass
@@ -85,7 +86,8 @@ class Translator:
         if opts.group_by_scene:
             order: dict[str, int] = {}
             records = sorted(records, key=lambda r: order.setdefault(r.scene, len(order)))
-        budget = opts.batch_chars or max(500, opts.max_chars - len(self.system) - _HEADER_RESERVE)
+        reserve = _HEADER_RESERVE + opts.context_lines * _EARLIER_LINE_COST
+        budget = opts.batch_chars or max(500, opts.max_chars - len(self.system) - reserve)
         return pack_scenes(records, lambda r: r.scene, lambda r: len(dumps(self._item(r, "0", False)[0])) + 1,
                            budget, max_items=opts.max_records, merge=opts.merge_scenes,
                            merge_max=opts.merge_max_lines)
@@ -113,6 +115,41 @@ class Translator:
             item["max_len"] = record.max_length
         return item, tokens
 
+    def _scene_rows(self, scenes: list[str]) -> list[Record]:
+        """Records of the batch's dialogue scenes for the cast lookup."""
+        if not self.cfg.translate.scene_cast:
+            return []
+        return [row for scene in scenes if scene in self.project.dialogue_scenes
+                for row in self.project.by_scene[scene]]
+
+    def _earlier_lines(self, records: list[Record]) -> list[str]:
+        """Lines shown before each scene's first batch record that are not in the batch."""
+        count = self.cfg.translate.context_lines
+        if count <= 0:
+            return []
+        in_batch = {record.id for record in records}
+        multi = len({record.scene for record in records}) > 1
+        seen: set[str] = set()
+        lines: list[str] = []
+        for record in records:
+            if not record.scene or record.scene in seen:
+                continue
+            seen.add(record.scene)
+            for row in self.project.preceding(record, count):
+                if row.id in in_batch or not row.texts:
+                    continue
+                item: dict[str, Any] = {}
+                if multi:
+                    item["scene"] = row.scene
+                if row.speaker:
+                    item["speaker"] = self.glossary.speaker_label(row.speaker)
+                item[next(iter(row.texts))] = self.masker.strip(row.source)
+                done = self.store.translation(row)
+                if done is not None:
+                    item[self.cfg.target_lang] = self.masker.strip(done)
+                lines.append(dumps(item))
+        return lines
+
     def build_prompt(self, records: list[Record], errors: dict[str, str] | None = None
                      ) -> tuple[str, dict[str, tuple[Record, list[str]]]]:
         scenes = list(dict.fromkeys(r.scene for r in records if r.scene))
@@ -122,12 +159,17 @@ class Translator:
         elif scenes:
             lines.append(f"{len(scenes)} unrelated scenes, each item list starts with its SCENE line; "
                          "keep dialogue flow within each scene only.")
+        scene_rows = self._scene_rows(scenes)
         characters, terms = self.glossary.relevant(
-            (text for r in records for text in r.texts.values()), (r.speaker for r in records))
+            (text for r in records for text in r.texts.values()), (r.speaker for r in records),
+            (text for r in scene_rows for text in r.texts.values()), (r.speaker for r in scene_rows))
         if characters:
             lines += ["CHARACTERS:", *(term.line() for term in characters)]
         if terms:
             lines += ["GLOSSARY:", *(term.line() for term in terms)]
+        earlier = self._earlier_lines(records)
+        if earlier:
+            lines += ["EARLIER LINES (context only, do not translate):", *earlier]
         lines.append("ITEMS:")
         local: dict[str, tuple[Record, list[str]]] = {}
         for index, record in enumerate(records, 1):
@@ -296,9 +338,21 @@ class Translator:
             return report
         log.info("%d records to translate in %d batches", len(todo), len(batches))
         workers = max(1, self.cfg.translate.workers)
+        numbered = list(enumerate(batches, 1))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="translate") as pool:
-            futures = [pool.submit(self._run_batch, batch, index, len(batches), report)
-                       for index, batch in enumerate(batches, 1)]
+            futures = [pool.submit(self._run_chain, chain, len(batches), report)
+                       for chain in self.chains(numbered)]
             for future in futures:
                 future.result()
         return report
+
+    def chains(self, numbered: list[tuple[int, list[Record]]]) -> list[list[tuple[int, list[Record]]]]:
+        """Batches that share a dialogue scene run one after another in one worker, so a batch
+        that continues a scene sees the previous one's translations in its EARLIER LINES;
+        other batches, and menus or tables without speakers, still run in parallel."""
+        dialogue = self.project.dialogue_scenes
+        return chain_by_scene(numbered, lambda item: {r.scene for r in item[1]} & dialogue)
+
+    def _run_chain(self, chain: list[tuple[int, list[Record]]], total: int, report: Report) -> None:
+        for index, batch in chain:
+            self._run_batch(batch, index, total, report)
