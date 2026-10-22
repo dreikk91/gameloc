@@ -93,3 +93,24 @@ def test_stateless_cli_unchanged(monkeypatch):
     for _ in range(2):
         assert provider.complete("rules", "request").text == "plain answer"
     assert all(prompt == "rules\n\nrequest" and "--json" not in args for args, prompt in calls)
+
+
+@pytest.mark.parametrize("conversation", [False, True])
+def test_codex_disables_extensions_by_default(conversation):
+    provider = CLIProvider(options(conversation=conversation))
+    assert provider.command[2:16] == [
+        "--disable", "hooks", "--disable", "plugins", "--disable", "skill_search",
+        "--enable", "skip_host_skill_discovery", "-c", "skills.bundled.enabled=false",
+        "-c", "skills.include_instructions=false",
+        "--sandbox", "read-only",
+    ]
+
+
+def test_codex_extensions_opt_in():
+    config = options(codex_extensions=True)
+    assert CLIProvider(config).command == config["command"]
+
+
+@pytest.mark.parametrize("command", [["claude", "-p"], ["runner", "{model}"], ["codex", "review"]])
+def test_other_commands_do_not_receive_codex_defaults(command):
+    assert CLIProvider(options(command=command, conversation=False)).command == command

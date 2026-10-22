@@ -24,6 +24,7 @@ class CLIProvider(Provider):
     ``stdin``    send the prompt on stdin (default true; Windows command lines max out at 32k chars).
     ``env``      extra environment variables.
     ``conversation``  reuse a Codex exec session (default false; stdin and {output_file} required).
+    ``codex_extensions``  retain configured Codex skills, plugins and hooks (default false).
 
     The reply is read from ``{output_file}`` when the command uses it, else from stdout.
     """
@@ -39,13 +40,19 @@ class CLIProvider(Provider):
         self.stdin = bool(options.get("stdin", True))
         self.env = {**os.environ, **{k: str(v) for k, v in (options.get("env") or {}).items()}}
         self.conversation = bool(options.get("conversation", False))
+        codex = Path(self.command[0]).stem.lower() == "codex" and self.command[1:2] == ["exec"]
         if self.conversation and (
-                Path(self.command[0]).stem.lower() != "codex" or self.command[1:2] != ["exec"]
-                or not self.stdin or self.command[-1] != "-"
+                not codex or not self.stdin or self.command[-1] != "-"
                 or not any("{output_file}" in arg for arg in self.command)
                 or "--ephemeral" in self.command or "resume" in self.command):
             raise ValueError("conversation requires codex exec, stdin, {output_file}, final '-', "
                              "and persisted sessions")
+        if codex and not options.get("codex_extensions", False):
+            self.command[2:2] = [
+                "--disable", "hooks", "--disable", "plugins", "--disable", "skill_search",
+                "--enable", "skip_host_skill_discovery", "-c", "skills.bundled.enabled=false",
+                "-c", "skills.include_instructions=false",
+            ]
         self._session_id: str | None = None
         self._system: str | None = None
         self._model: str | None = None
