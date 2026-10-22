@@ -503,6 +503,7 @@ class Proofreader:
 
             def run_chain(chain: list[dict[str, Any]], stage: str = current, numbered: dict[int, int] = numbered,
                           total: int = len(pending)) -> int:
+                self._provider().reset()  # isolate scene chains and proofreading stages
                 answered = 0
                 for packet in chain:
                     ok = self._work(stage, packet)

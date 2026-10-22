@@ -32,6 +32,10 @@ class FakeProvider(Provider):
         super().__init__({"model": "fake"})
         self.answer = answer
         self.calls = 0
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
 
     def _send(self, model: str, system: str, user: str) -> Completion:
         self.calls += 1
@@ -293,6 +297,18 @@ def test_dialogue_scene_batches_run_in_order(tmp_path: Path) -> None:
     assert '"uk":"Рядок 3"' in later  # the previous batch was already translated
 
 
+def test_translation_resets_conversation_between_scene_chains(tmp_path: Path) -> None:
+    data = _project(tmp_path)
+    data["translate"] = {"max_records": 1, "merge_scenes": False, "workers": 1}
+    provider = FakeProvider(lambda s, u: json.dumps([
+        {"id": item["id"], "text": "Привіт " + "".join(item.get("markers", []))}
+        for line in u.splitlines() if line.startswith('{"id"') for item in [json.loads(line)]]))
+    translator = Translator(config_from_dict(data, tmp_path), provider_factory=lambda: provider)
+    report = translator.run()
+    assert report.failed == 0 and report.translated == 3
+    assert provider.resets == 2  # two scene chains; split s1 stays in one conversation
+
+
 def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
     long = "A fairly long line of dialogue that takes some room in a packet."
     rows = [{"id": f"a{i}", "en": f"{long} {i}", "who": "Rufus", "scene": "ev1"} for i in range(3)]
@@ -322,7 +338,14 @@ def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
             records.append(item)
         return json.dumps({"batch_id": packet["batch_id"], "stage": stage, "records": records}, ensure_ascii=False)
 
-    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1", provider_factory=lambda: FakeProvider(reviewer))
+    providers: list[FakeProvider] = []
+
+    def factory() -> FakeProvider:
+        provider = FakeProvider(reviewer)
+        providers.append(provider)
+        return provider
+
+    proofreader = Proofreader(cfg, cfg.work_dir / "proofread" / "r1", provider_factory=factory)
     proofreader.prepare()
     packets = list(proofreader.packets("meaning").values())
     scenes = [{proofreader.snapshot["records"][rid]["scene"] for rid in p["ids"]} for p in packets]
@@ -333,6 +356,7 @@ def test_proofread_keeps_scenes_together(tmp_path: Path) -> None:
     assert max(len(c) for c in proofreader.chains(packets)) == len([s for s in scenes if "ev2" in s])
 
     proofreader.run()
+    assert sum(provider.resets for provider in providers) == 6  # two scene chains in each of three stages
     continued = [m for m in edit_messages if m.get("earlier")]
     # a part that continues ev2 sees the previous part's corrections, not the drafts
     assert continued and all(line["translation"].startswith("Виправлено ")
