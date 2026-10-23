@@ -354,5 +354,6 @@ class Translator:
         return chain_by_scene(numbered, lambda item: {r.scene for r in item[1]} & dialogue)
 
     def _run_chain(self, chain: list[tuple[int, list[Record]]], total: int, report: Report) -> None:
+        self._provider().reset()  # unrelated scene chains must not share conversation history
         for index, batch in chain:
             self._run_batch(batch, index, total, report)

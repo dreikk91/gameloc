@@ -119,8 +119,33 @@ command = ["agy.exe", "-p", "{prompt}", "--model", "{model}"]
 | `command` | arguments; `{model}`, `{output_file}` (the reply is read from that file), `{prompt}` |
 | `stdin` | `true` — the prompt is sent on stdin (recommended: Windows command lines are limited to 32k characters) |
 | `env` | extra environment variables |
+| `conversation` | `false` by default; `true` reuses a Codex exec session for consecutive packets of a scene chain |
+| `codex_extensions` | `false` by default; `true` retains the configured skills, plugins and hooks for `codex exec` |
 
-The CLI provider is stateless: the system prompt is included in every request.
+For `codex exec` commands, gameloc disables hooks, plugins, skill search, bundled skills,
+host skill discovery, and the skills instructions/catalog by default. This applies to stateless
+and resumed calls, without editing global Codex settings. Translation rules, glossary, and scene
+context still come from the gameloc project. Other CLI programs are unaffected.
+Set `codex_extensions = true` to omit these automatic overrides and use your Codex configuration;
+explicit disabling flags in `command` still apply. These defaults were verified with Codex CLI 0.162.1;
+older versions must support the corresponding feature/config flags or opt out.
+
+The CLI provider is stateless by default: the system prompt is included in every request.
+For Codex, add `conversation = true` to the profile above. Keep stdin enabled, the final `"-"`,
+and `{output_file}`; do not use `--ephemeral`. Gameloc adds `--json`, captures `thread.started`,
+and sends later packets with `codex exec ... resume <id> -`. Only the new user payload is sent;
+Codex restores the conversation history. Command options remain in effect on resumed turns.
+
+Translation and proofreading reset conversations between scene chains; proofreading stages also
+start fresh. Small scenes merged into one packet share that packet's chain; use
+`[translate] merge_scenes = false` for strict separation. Each worker has its own provider.
+Changed system instructions or models, rejected replies, and failed CLI calls start a fresh session.
+Session IDs are logged, and `input_tokens`, `cached_input_tokens`, and `output_tokens` reported by
+Codex are collected in `stats.json`. Cache hits and savings are not guaranteed.
+
+Session reuse lasts for the current gameloc run. Restarting gameloc starts fresh conversations;
+completed translation/review checkpoints are still retained. Codex persists its own sessions,
+so a logged ID can be opened manually with `codex resume <id>`.
 
 ## Checking
 
