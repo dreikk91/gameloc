@@ -124,7 +124,7 @@ class CLIProvider(Provider):
                 raise TransientError("Codex resumed a different session")
             # Codex reports cumulative session usage, including turns from earlier exec processes.
             totals = usage
-            usage = {key: value - self._usage.get(key, 0) for key, value in totals.items()}
+            usage = {key: max(0, value - self._usage.get(key, 0)) for key, value in totals.items()}
             self._usage = totals
             self._session_id, self._system, self._model = session_id, system, model
             log.info("Codex session %s (%s)", session_id, "resumed" if continuing else "new")
