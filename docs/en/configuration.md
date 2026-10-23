@@ -123,7 +123,7 @@ Examples: `'\[[a-z_]+=[^\]]*\]'` (`[flag=x]`), `'#\w+#'`, `'\$[A-Z_]+\$'`, `'&[a
 | Key | Default | Description |
 |---|---|---|
 | `forbid` | per language | regexes that must not match the visible text. Default: CJK for non-CJK targets; for `uk` also `ыэёъ` |
-| `latin` | `true` for Cyrillic targets | Latin words absent from the source are an error |
+| `latin` | `true` for Cyrillic targets | Latin words absent from the source are an error. Before validation, Latin look-alikes inside Cyrillic words (`Несiть` with a Latin `i`) are replaced with Cyrillic letters, in translations and proofreading edits alike |
 | `allowed_latin` | `[]` | allowed Latin words (`HP`, `OK`, brand names) |
 | `max_length` | `true` | check the length limit from `source.max_length` |
 | `length_encoding` | — | count `max_length` in bytes of this codec (`cp1251`, `shift_jis`...), tags included: for fixed-size records |

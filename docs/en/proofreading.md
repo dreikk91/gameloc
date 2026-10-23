@@ -52,9 +52,11 @@ gameloc_work/proofread/20260924-101500/
   review.json                 after export: everything that needs a human
 ```
 
-- Every answer is validated: same `batch_id` and stage, every id exactly once, an allowed decision,
+- Every answer is validated: same stage, every id exactly once, an allowed decision,
   a non-empty note; for `change` also tag markers and full text validation. A rejected answer goes back
-  to the model with the error description (`attempts`).
+  to the model with the error description (`attempts`). `submit` also requires the same `batch_id`;
+  `run` does not, since models often garble it while the ids already prove the answer is for this packet.
+- `export` refuses to run while a stage has no packets or unanswered ones: run `proofread run` again first.
 - Answers are bound to the prompt hash, which covers everything under review (the lines, the
   glossary, the stage prompt): if a packet changed, an old answer is never silently reused.
   `earlier` is read-only context built when the packet is sent, so it is not part of the hash.

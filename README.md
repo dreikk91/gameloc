@@ -15,6 +15,7 @@ From there the pipeline is the same for Unity, Unreal Engine 5 and custom engine
   languages may live in separate files joined by id.
 - **Any API**: OpenAI-compatible (OpenAI, Anthropic, OpenRouter, DeepSeek, Mistral, Groq, Ollama, LM Studio,
   vLLM, Copilot proxies), native Gemini, any command-line tool (`codex exec`, `claude -p`, `gemini`...).
+  `codex exec` can keep one conversation per scene and runs without coding skills, plugins and hooks.
   Third-party providers plug in through entry points.
 - **Checkpoints**: every accepted line is written to `translations.jsonl` immediately (fsync). Interrupt it,
   run it again, and it continues where it stopped. When the source text changes, the line is translated again.
@@ -23,10 +24,12 @@ From there the pipeline is the same for Unity, Unreal Engine 5 and custom engine
 - **Validation**: tags, forbidden characters (CJK; Russian-only letters for Ukrainian), characters missing from the
   game font, dialogue box fit (pixel widths, word wrap, line count), byte limits, untranslated Latin words,
   line length limits. Rejected lines go back to the model together with the error.
-- **Context**: scene grouping, speaker with grammatical gender, character profiles and glossary entries —
-  only those relevant to the current batch.
+- **Context**: whole scenes per batch, speaker with grammatical gender, the scene's full cast, character profiles
+  and glossary entries relevant to the batch. Parts of a long scene go in order through one worker and see
+  the already translated earlier lines.
 - **Three-pass proofreading** `meaning → edit → verify` with an immutable snapshot, validation of every answer
-  and a manual mode for any chat UI.
+  and a manual mode for any chat UI; `resolve` settles what is left, `proofread auto` runs it all in one command.
+- **Hand edits stay**: `set`, `sheet-import` and `names --apply` are never overwritten by later proofreading runs.
 - Deduplication of identical lines, batch splitting on context overflow, parallel workers, rate limits/RPM,
   fallback model chains, token statistics, audit, CSV sheets for human editors.
 - **Zero dependencies**: Python ≥ 3.11 standard library only. Fully typed (`mypy --strict`).
