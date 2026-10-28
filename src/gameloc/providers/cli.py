@@ -113,7 +113,8 @@ class CLIProvider(Provider):
             event_error = _event_error(proc.stdout) if self.conversation else ""
             if self.conversation and not output.exists():
                 self.reset()
-                detail = event_error or (proc.stderr or proc.stdout).strip()[-2000:] or "Codex did not write its reply file"
+                detail = (event_error or (proc.stderr or proc.stdout).strip()[-2000:]
+                          or "Codex did not write its reply file")
                 raise classify(0, detail)
             if uses_file and output.exists():
                 text = output.read_text(encoding="utf-8", errors="replace")
