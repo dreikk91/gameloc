@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gameloc.providers import TransientError
+from gameloc.providers import QuotaExhausted, TransientError
 from gameloc.providers.cli import CLIProvider
 
 
@@ -114,3 +114,20 @@ def test_codex_extensions_opt_in():
 @pytest.mark.parametrize("command", [["claude", "-p"], ["runner", "{model}"], ["codex", "review"]])
 def test_other_commands_do_not_receive_codex_defaults(command):
     assert CLIProvider(options(command=command, conversation=False)).command == command
+
+
+@pytest.mark.parametrize("reply_file", [False, True])
+def test_codex_failure_reason_comes_from_json_events_not_stderr(monkeypatch, reply_file):
+    limit = "You've hit your usage limit. Upgrade to Pro or try again at 6:57 PM."
+
+    def run(args, **kwargs):
+        if reply_file:
+            Path(args[args.index("--output-last-message") + 1]).write_text("partial", encoding="utf-8")
+        events = [{"type": "thread.started", "thread_id": "session-1"}, {"type": "error", "message": limit},
+                  {"type": "turn.failed", "error": {"message": limit}}]
+        return subprocess.CompletedProcess(args, 0, "\n".join(map(json.dumps, events)),
+                                           "ERROR codex_core: failed to load skill SKILL.md: missing YAML frontmatter")
+
+    monkeypatch.setattr("gameloc.providers.cli.subprocess.run", run)
+    with pytest.raises(QuotaExhausted, match="usage limit"):
+        CLIProvider(options()).complete("rules", "next")

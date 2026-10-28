@@ -61,7 +61,8 @@ _OVERFLOW = ("context length", "context window", "context limit", "maximum conte
 _AUTH = ("invalid api key", "api_key_invalid", "api key not valid", "unauthorized", "incorrect api key",
          "clearance_required", "permission denied")
 _QUOTA = ("per day", "perday", "daily", "insufficient_quota", "quota exceeded", "credits",
-          "too-many-messages", "too_many_messages", "message limit reached", "session message limit")
+          "too-many-messages", "too_many_messages", "message limit reached", "session message limit",
+          "usage limit")
 _RATE = ("rate limit", "rate_limit", "too many requests", "resource_exhausted")
 _OVERLOADED = ("overloaded", "unavailable", "high demand", "try again later")
 
