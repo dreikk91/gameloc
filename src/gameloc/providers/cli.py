@@ -17,6 +17,25 @@ from .base import Completion, Provider, ProviderError, TransientError, classify
 log = logging.getLogger("gameloc")
 
 
+def _event_error(stdout: str) -> str:
+    """Message of the last ``error``/``turn.failed`` event of ``codex exec --json``.
+
+    Codex reports why a turn failed (usage limit, auth...) only in these stdout events;
+    stderr then holds unrelated log lines that would hide the real cause."""
+    message = ""
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        error = event.get("error") if event.get("type") == "turn.failed" else event
+        if event.get("type") in ("error", "turn.failed") and isinstance(error, dict) and error.get("message"):
+            message = str(error["message"])
+    return message
+
+
 class CLIProvider(Provider):
     """Options:
 
@@ -91,15 +110,17 @@ class CLIProvider(Provider):
                 self.reset()
                 raise ProviderError(f"cannot run {self.command[0]}: {exc}") from exc
             text = proc.stdout
+            event_error = _event_error(proc.stdout) if self.conversation else ""
             if self.conversation and not output.exists():
                 self.reset()
-                detail = (proc.stderr or proc.stdout).strip()[-2000:] or "Codex did not write its reply file"
+                detail = (event_error or (proc.stderr or proc.stdout).strip()[-2000:]
+                          or "Codex did not write its reply file")
                 raise classify(0, detail)
             if uses_file and output.exists():
                 text = output.read_text(encoding="utf-8", errors="replace")
         if proc.returncode != 0 or not text.strip():
             self.reset()
-            detail = (proc.stderr or proc.stdout or "").strip()[-2000:] or f"exit code {proc.returncode}"
+            detail = event_error or (proc.stderr or proc.stdout or "").strip()[-2000:] or f"exit code {proc.returncode}"
             raise classify(0, detail)
         usage: dict[str, int] = {}
         if self.conversation:
@@ -118,6 +139,8 @@ class CLIProvider(Provider):
                 raise TransientError("Codex returned invalid JSON events") from exc
             if not completed or not isinstance(session_id, str) or not session_id:
                 self.reset()
+                if event_error:
+                    raise classify(0, event_error)
                 raise TransientError("Codex did not report a session ID and completed turn")
             if continuing and session_id != self._session_id:
                 self.reset()
