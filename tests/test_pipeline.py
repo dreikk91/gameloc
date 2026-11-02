@@ -15,7 +15,8 @@ from gameloc import (
     Translator,
     config_from_dict,
 )
-from gameloc.cli import audit, grep, names, proofread_auto, set_translation, show
+from gameloc.check import Checker
+from gameloc.cli import apply_fixes, audit, grep, main, names, proofread_auto, set_translation, show
 from gameloc.config import Config
 from gameloc.formats import load_table
 from gameloc.glossary import Glossary
@@ -495,3 +496,81 @@ def test_names_one_spelling(tmp_path: Path) -> None:
     assert store.entries["m1"]["status"] == "unified"
     report = Proofreader(cfg, cfg.work_dir / "proofread" / "r1").prepare()
     assert report["manual_skipped"] == 2  # unified names are left alone like hand edits
+
+
+def test_check_stores_fixes_logs_terms_and_resumes(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    set_translation(cfg, "c", "Бувай, {name}.")
+
+    def answer(system: str, user: str) -> str:
+        assert "russism" in system and "Бувай" not in user  # a hand edit is not sent
+        return json.dumps([{"id": "1", "type": "gender", "note": "рід", "fix": "Вітаю{0}Шіон{1}!"},
+                           {"id": "2", "type": "term", "note": "термін", "fix": "Вітання{0}Шіон{1}!"}],
+                          ensure_ascii=False)
+
+    provider = FakeProvider(answer)
+    report = Checker(cfg, provider_factory=lambda: provider).run()
+    assert (report["fixed"], report["rejected"], report["failed"]) == (1, 1, 0)
+    store = Store(cfg.work_dir)
+    assert (store.entries["a"]["text"], store.entries["a"]["status"]) == ("Вітаю<b>Шіон</b>!", "checked")
+    assert store.entries["b"]["status"] != "checked"  # term proposals wait for a person
+    assert "review: Вітання" in Path(report["changes"]).read_text(encoding="utf-8-sig")
+    assert Checker(cfg, provider_factory=lambda: provider).run()["selected"] == 0
+    assert provider.calls == 1
+
+
+def test_check_rejects_invalid_fix_and_retries_lost_numbering(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    replies = [[{"id": "1", "type": "gender", "note": "x", "fix": "Привіт"}],  # markers lost: asked again
+               [{"id": "1", "type": "gender", "note": "x", "fix": "Привіт"}]]
+    provider = FakeProvider(lambda system, user: json.dumps(replies.pop(0) if replies else [], ensure_ascii=False))
+    report = Checker(cfg, provider_factory=lambda: provider).run(scenes=["s1"])
+    assert (report["fixed"], report["rejected"], report["failed"]) == (0, 1, 0)
+    assert provider.calls == 2 and provider.resets >= 2
+
+
+@pytest.mark.parametrize(("conversation", "second"), [(False, "SCENE: s1"), (True, "Next lines")])
+def test_check_repeats_scene_header_without_a_conversation(tmp_path: Path, conversation: bool, second: str) -> None:
+    cfg = _proofread_project(tmp_path)
+    cfg.proofread.max_records = 1
+    prompts: list[str] = []
+
+    def answer(system: str, user: str) -> str:
+        prompts.append(user)
+        return "[]"
+
+    provider = FakeProvider(answer)
+    provider.conversation = conversation  # type: ignore[attr-defined]
+    Checker(cfg, provider_factory=lambda: provider).run(scenes=["s1"])
+    assert prompts[0].startswith("SCENE: s1") and prompts[1].startswith(second)
+
+
+def test_check_stops_on_quota_and_failed_run_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = _proofread_project(tmp_path)
+
+    def out_of_quota(system: str, user: str) -> str:
+        raise QuotaExhausted("stop")
+
+    report = Checker(cfg, provider_factory=lambda: FakeProvider(out_of_quota)).run()
+    assert report["stopped"] == "stop"
+    monkeypatch.setattr("gameloc.cli.run", lambda args: report)
+    assert main(["status"]) == 1
+    monkeypatch.setattr("gameloc.cli.run", lambda args: {"failed": 0, "stopped": None})
+    assert main(["status"]) == 0
+
+
+def test_fix_is_repeatable_and_reports_what_it_cannot_apply(tmp_path: Path) -> None:
+    cfg = _proofread_project(tmp_path)
+    path = tmp_path / "fixes.json"
+    fixes = [["a", "Привіт", "Привіт, Привіт"], ["a", ", Привіт", ""], ["b", "немає", "x"],
+             ["c", "{name}", "ім'я"], ["zzz", "a", "b"]]
+    path.write_text(json.dumps(fixes, ensure_ascii=False), encoding="utf-8")
+    assert apply_fixes(cfg, path, dry_run=True) == {"would_change": 0, "failed": 2, "unknown_ids": 1}
+    assert Store(cfg.work_dir).entries["a"]["status"] == "translated"
+    path.write_text(json.dumps(fixes[:1], ensure_ascii=False), encoding="utf-8")
+    assert apply_fixes(cfg, path) == {"changed": 1, "failed": 0, "unknown_ids": 0}
+    assert apply_fixes(cfg, path) == {"changed": 0, "failed": 0, "unknown_ids": 0}  # the new text contains the old one
+    assert Store(cfg.work_dir).entries["a"]["status"] == "manual"
+    path.write_text('[["a", "", "x"]]', encoding="utf-8")
+    with pytest.raises(ValueError, match="empty old"):
+        apply_fixes(cfg, path)
