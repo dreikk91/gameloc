@@ -197,6 +197,7 @@ class PromptConfig:
     rules_file: str | None = None
     translate_file: str | None = None
     proofread_file: str | None = None
+    check_file: str | None = None
     note_language: str | None = None
 
 

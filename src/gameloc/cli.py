@@ -17,6 +17,7 @@ from shutil import rmtree
 from typing import Any
 
 from . import __version__
+from .check import Checker
 from .config import Config, load_config
 from .glossary import Glossary
 from .proofread import ALL_STAGES, RESOLVE, Proofreader
@@ -228,6 +229,50 @@ def set_translation(cfg: Config, record_id: str, text: str, force: bool = False)
     return {"id": record_id, "previous": previous, "translation": text, "problems": problems}
 
 
+def apply_fixes(cfg: Config, path: Path, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+    """Apply a reviewed list of ``[id, old, new]`` substitutions as hand edits. Repeatable: a done fix is
+    skipped, a fix whose old text is gone or whose result fails validation counts as failed."""
+    project, store = Project(cfg), Store(cfg.work_dir)
+    validator = make_validator(cfg, TagMasker.from_config(cfg.tags))
+    fixes: dict[str, list[tuple[str, str]]] = {}
+    for record_id, old, new in read_json(path):
+        if not old:
+            raise ValueError(f"{record_id}: empty old text")
+        fixes.setdefault(record_id, []).append((old, new))
+    changed = failed = unknown = 0
+    for record_id, pairs in fixes.items():
+        record = project.by_id.get(record_id)
+        if record is None:  # one list may serve several project files
+            log.warning("%s: not in this project", record_id)
+            unknown += len(pairs)
+            continue
+        before = store.translation(record)
+        if before is None:
+            log.warning("%s: no current translation", record_id)
+            failed += len(pairs)
+            continue
+        text = before
+        for old, new in pairs:
+            if old not in text if not new else new in text:  # a new text may contain the old one
+                continue
+            if old in text:
+                text = text.replace(old, new)
+            else:
+                log.warning("%s: not found: %r", record_id, old)
+                failed += 1
+        if text == before:
+            continue
+        problems = validator.problems(record, text)
+        if problems and not force:
+            log.warning("%s: %s", record_id, "; ".join(problems))
+            failed += 1
+            continue
+        changed += 1
+        if not dry_run:
+            store.put(record, text, "manual", previous=before)
+    return {("would_change" if dry_run else "changed"): changed, "failed": failed, "unknown_ids": unknown}
+
+
 def names(cfg: Config, apply: bool = False, max_len: int = 40) -> dict[str, Any]:
     """One spelling per short name.
 
@@ -364,12 +409,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("pattern")
     p.add_argument("--limit", type=int, default=50)
 
+    p = commands.add_parser("check", help="one pass over stored translations: fix lines with a concrete problem")
+    p.add_argument("--scene", nargs="+", help="only these scenes (prefix match)")
+    p.add_argument("--limit", type=int, help="check at most N lines")
+    p.add_argument("--provider")
+    p.add_argument("--model")
+    p.add_argument("--workers", type=int)
+    p.add_argument("--dry-run", action="store_true", help="print the first prompt, call nothing")
+
     commands.add_parser("export", help="write translations into copies of the game files")
 
     p = commands.add_parser("set", help="store a hand edit of one line (proofreading leaves it alone)")
     p.add_argument("id")
     p.add_argument("text")
     p.add_argument("--force", action="store_true", help="store it even if validation fails")
+    p = commands.add_parser("fix", help="apply a JSON list of [id, old, new] substitutions as hand edits")
+    p.add_argument("path", type=Path)
+    p.add_argument("--dry-run", action="store_true", help="count the changes, store nothing")
+    p.add_argument("--force", action="store_true", help="store fixes even if validation fails")
     p = commands.add_parser("names", help="one spelling per short name (items, places, skills)")
     p.add_argument("--apply", action="store_true", help="store the chosen spellings as hand edits")
     p.add_argument("--max-len", type=int, default=40, help="longest source text treated as a name")
@@ -442,6 +499,11 @@ def run(args: argparse.Namespace) -> Any:
         return vars(report)
     if args.command == "test":
         return test_provider(cfg, args.provider, args.model)
+    if args.command == "check":
+        if args.workers:
+            cfg.proofread.workers = args.workers
+        return Checker(cfg, provider=args.provider, model=args.model).run(
+            scenes=args.scene, limit=args.limit, dry_run=args.dry_run)
     if args.command == "audit":
         return audit(cfg, args.requeue, args.terms)
     if args.command == "show":
@@ -456,6 +518,8 @@ def run(args: argparse.Namespace) -> Any:
         return sheet_import(cfg, args.path)
     if args.command == "set":
         return set_translation(cfg, args.id, args.text, args.force)
+    if args.command == "fix":
+        return apply_fixes(cfg, args.path, args.dry_run, args.force)
     if args.command == "names":
         return names(cfg, args.apply, args.max_len)
 
@@ -500,7 +564,10 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     try:
-        _print(run(args))
+        result = run(args)
+        _print(result)
+        if isinstance(result, dict) and (result.get("failed") or result.get("stopped")):
+            return 1  # scripts must not take an unfinished run for a finished one
     except KeyboardInterrupt:
         print("interrupted; progress is saved, run the same command to resume", file=sys.stderr)
         return 130
