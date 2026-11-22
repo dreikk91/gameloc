@@ -29,7 +29,8 @@ From there the pipeline is the same for Unity, Unreal Engine 5 and custom engine
   the already translated earlier lines.
 - **Three-pass proofreading** `meaning → edit → verify` with an immutable snapshot, validation of every answer
   and a manual mode for any chat UI; `resolve` settles what is left, `proofread auto` runs it all in one command.
-- **Hand edits stay**: `set`, `sheet-import` and `names --apply` are never overwritten by later proofreading runs.
+- **One-pass check**: `check` reads whole scenes and fixes only lines with a concrete problem, without a review of every line.
+- **Hand edits stay**: `set`, `fix`, `sheet-import` and `names --apply` are never overwritten by later proofreading runs.
 - Deduplication of identical lines, batch splitting on context overflow, parallel workers, rate limits/RPM,
   fallback model chains, token statistics, audit, CSV sheets for human editors.
 - **Zero dependencies**: Python ≥ 3.11 standard library only. Fully typed (`mypy --strict`).
@@ -89,7 +90,9 @@ rpm = 10
 | `show ID [--context N]` / `grep REGEX` | a line with its neighbours / search sources and translations |
 | `export` | write translations into the game files (`[output]`) |
 | `sheet-export FILE.csv` / `sheet-import FILE.csv` | spreadsheet round trip for human editors |
+| `check [--scene S] [--limit N] [--provider P] [--model M] [--workers N] [--dry-run]` | one pass over stored translations: the model reports only real problems, valid fixes are stored, glossary proposals are logged |
 | `set ID TEXT` | store a hand edit of one line (e.g. after a play test); proofreading leaves hand edits alone |
+| `fix FILE.json [--dry-run] [--force]` | apply a reviewed list of `[id, old, new]` substitutions as hand edits; safe to repeat |
 | `names [--apply]` | one spelling per short name (items, places, skills) translated differently in different batches |
 | `proofread auto` | continue the latest run or start a new one, run every stage, export |
 | `proofread prepare / run / advance / next / submit / status / export / resolve` | three-pass proofreading; `resolve` settles `review.json` |

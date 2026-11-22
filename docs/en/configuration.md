@@ -187,6 +187,7 @@ See [proofreading](proofreading.md).
 | `rules_file` | the same, from a file |
 | `translate_file` | full replacement of the translation system prompt |
 | `proofread_file` | replacement of the shared proofreading prompt (stage instructions are appended) |
+| `check_file` | full replacement of the `gameloc check` prompt |
 | `note_language` | language of reviewer notes (default: the target language) |
 
 Custom prompts may use the placeholders `{game}`, `{target}`, `{sources}`, `{priority}`, `{rules}`, `{note_language}`.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+from .check import Checker
 from .config import Config, ConfigError, config_from_dict, load_config
 from .glossary import Glossary, Term
 from .proofread import Proofreader
@@ -24,7 +25,7 @@ from .text import TagMasker, Validator, make_validator
 from .translate import Report, Translator
 
 __all__ = [
-    "AuthError", "Completion", "Config", "ConfigError", "ContextOverflow", "Glossary", "Project",
+    "AuthError", "Checker", "Completion", "Config", "ConfigError", "ContextOverflow", "Glossary", "Project",
     "Proofreader", "Provider", "ProviderError", "QuotaExhausted", "RateLimited", "Record", "Report",
     "Store", "TagMasker", "Term", "TransientError", "Translator", "Validator", "__version__", "make_validator",
     "config_from_dict", "create_provider", "load_config",

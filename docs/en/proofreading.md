@@ -97,6 +97,27 @@ gameloc proofread next resolve           # or by hand / with an outside agent: n
 Edit `review.json` before `resolve` to drop lines a human should handle. Lines whose draft changed since
 the snapshot are skipped.
 
+## One-pass check
+
+`gameloc check` is a cheaper review of the whole game. The model reads each scene and reports only lines with a
+concrete problem (`gender`, `address`, `unnatural`, `meaning`, `term`; Ukrainian also `russism`), with the corrected
+line. A fix that passes validation is stored at once with status `checked` and the previous text.
+
+```bash
+gameloc check --limit 200                 # a trial: read check_changes.csv before going on
+gameloc check                             # the rest; rerun to resume
+```
+
+- It uses the `[proofread]` provider, `workers`, `attempts`, `max_chars`, `batch_chars` and `max_records` (default 40).
+- `check.jsonl` remembers lines by their wording: a rerun skips them until the text changes. Hand edits are skipped.
+- `term` proposals are never applied, only logged in `check_changes.csv` with `review:` in the `rejected` column.
+  On a 26,000-line visual novel 17 of 65 such fixes were harmful: they forced the dictionary form, broke the vocative
+  or replaced a nickname with the full name. Apply the good ones with `gameloc fix`.
+- The check found 1,754 fixes there. Only a sample of them was read, so read a sample in your project too; it is
+  compared with neither three-pass proofreading nor a human review.
+- `[prompt] check_file` replaces the prompt; `[prompt] rules` and `rules_file` are appended to it, so put the table
+  of ти/ви pairs and the narration rules there.
+
 ## After proofreading
 
 `review.json` lists, for every line that did not pass, the reason, the source, the draft, the proposal and the notes of all stages.
@@ -107,11 +128,15 @@ gameloc sheet-export review.csv --scene chapter1
 # the translator edits the "translation" column
 gameloc sheet-import review.csv           # validation + status "manual"
 gameloc set ev12_034 "Fixed line"         # one line, e.g. after a play test
+gameloc fix fixes.json                    # a reviewed list: [["ev12_034", "old words", "new words"], ...]
 ```
+
+`fix` keeps the corrections in one file you can read and rerun, for example after a retranslation: a done fix is
+skipped; a fix whose old text is gone or whose result fails validation is reported and the exit code is 1. Ids of another project file only count as `unknown_ids`, so one list can serve several streams.
 
 Hand edits are never sent to proofreading again unless `prepare --include-manual` is given, so a later
 run does not overwrite what a human fixed. The checkpoint keeps who decided: `manual` for a person
-(`sheet-import`, `set`), `unified` for `names --apply`, `proofread` for the review itself.
+(`sheet-import`, `set`, `fix`), `unified` for `names --apply`, `proofread` for the review itself.
 
 Item, skill and place names are translated batch by batch, so one source name may end up with several
 spellings. `gameloc names` lists them in `names.json` with the spelling it would choose: the first one that
